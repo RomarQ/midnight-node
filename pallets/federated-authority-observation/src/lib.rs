@@ -446,5 +446,14 @@ pub mod pallet {
 				})
 				.collect::<Result<Vec<_>, _>>()
 		}
+
+        /// Check if there are duplicated members in the set
+        fn there_are_duplicate_members<M: Ord, MAX>(members: BoundedVec<M, MAX>) -> bool {
+            use sp_std::collections::btree_set::BTreeSet;
+            let members_vec_len = members.len();
+			let members_set: BTreeSet<M> = members.into_iter().collect();
+			
+			members_set.len() != members_vec_len
+        }
 	}
 }
