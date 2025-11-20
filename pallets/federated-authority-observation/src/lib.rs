@@ -147,23 +147,20 @@ pub mod pallet {
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		/// Council members reset
-		CouncilMembersReset {
-			members: BoundedVec<T::AccountId, T::CouncilMaxMembers>,
-			members_mainchain: BoundedVec<MainchainMember, T::CouncilMaxMembers>,
-		},
+		CouncilMembersReset { members: Vec<T::AccountId>, members_mainchain: Vec<MainchainMember> },
 		/// Technical Committee members reset
 		TechnicalCommitteeMembersReset {
-			members: BoundedVec<T::AccountId, T::TechnicalCommitteeMaxMembers>,
-			members_mainchain: BoundedVec<MainchainMember, T::TechnicalCommitteeMaxMembers>,
+			members: Vec<T::AccountId>,
+			members_mainchain: Vec<MainchainMember>,
 		},
 	}
 
 	#[pallet::error]
 	pub enum Error<T> {
-		/// Too many members.
-		TooManyMembers,
 		/// Membership set is empty
 		EmptyMembers,
+		/// Duplicate Members
+		DuplicatedMembers,
 	}
 
 	#[pallet::hooks]
@@ -179,26 +176,34 @@ pub mod pallet {
 		#[allow(clippy::useless_conversion)]
 		pub fn reset_members(
 			origin: OriginFor<T>,
-			council_authorities: Vec<(T::AccountId, MainchainMember)>,
-			technical_committee_authorities: Vec<(T::AccountId, MainchainMember)>,
+			council_authorities: BoundedVec<(T::AccountId, MainchainMember), T::CouncilMaxMembers>,
+			technical_committee_authorities: BoundedVec<
+				(T::AccountId, MainchainMember),
+				T::TechnicalCommitteeMaxMembers,
+			>,
 		) -> DispatchResultWithPostInfo {
 			ensure_none(origin)?;
 
-			let (council_account_ids, council_mainchain_members): (Vec<_>, Vec<_>) =
-				council_authorities.into_iter().unzip();
-			let (technical_committee_account_ids, technical_committee_mainchain_members): (
+			let (mut council_members, council_mainchain_members): (Vec<_>, Vec<_>) =
+				council_authorities.clone().into_iter().unzip();
+			let (mut technical_committee_members, technical_committee_mainchain_members): (
 				Vec<_>,
 				Vec<_>,
-			) = technical_committee_authorities.into_iter().unzip();
+			) = technical_committee_authorities.clone().into_iter().unzip();
 
-			// Prepare Council members
-			let mut council_members: BoundedVec<T::AccountId, T::CouncilMaxMembers> =
-				BoundedVec::try_from(council_account_ids.clone())
-					.map_err(|_| Error::<T>::TooManyMembers)?;
+			let council_members_len = council_members.len() as u32;
+			let technical_committee_members_len = technical_committee_members.len() as u32;
 
+			// ---- Council ----
 			// Make sure an empty set of members is not allowed
 			ensure!(!council_members.is_empty(), Error::<T>::EmptyMembers);
 			council_members.sort();
+
+			// Make sure there are not duplicated members
+			ensure!(
+				!Self::has_duplicated_members(council_authorities),
+				Error::<T>::DuplicatedMembers
+			);
 
 			let council_current_members = T::CouncilMembershipHandler::sorted_members();
 
@@ -206,19 +211,6 @@ pub mod pallet {
 
 			let council_members_have_changed =
 				council_current_members.as_slice() != council_members.as_slice();
-
-			// Prepare Council mainchain members
-			let council_mainchain_members: BoundedVec<MainchainMember, T::CouncilMaxMembers> =
-				BoundedVec::try_from(council_mainchain_members.clone())
-					.map_err(|_| Error::<T>::TooManyMembers)?;
-
-			// Make sure an empty set of mainchain members is not allowed
-			ensure!(!council_mainchain_members.is_empty(), Error::<T>::EmptyMembers);
-
-			let council_current_mainchain_members = CouncilMainchainMembers::<T>::get();
-
-			let council_mainchain_members_have_changed =
-				council_current_mainchain_members != council_mainchain_members;
 
 			// If Council membership has changed
 			if council_members_have_changed {
@@ -228,9 +220,23 @@ pub mod pallet {
 				);
 			}
 
+			// Make sure an empty set of mainchain members is not allowed
+			ensure!(!council_mainchain_members.is_empty(), Error::<T>::EmptyMembers);
+
+			let council_current_mainchain_members = CouncilMainchainMembers::<T>::get();
+
+			let council_mainchain_members_have_changed =
+				council_current_mainchain_members != council_mainchain_members;
+
+			let council_mainchain_members_bound: BoundedVec<MainchainMember, T::CouncilMaxMembers> =
+				council_mainchain_members
+					.clone()
+					.try_into()
+					.expect("call arg council_authorities is bounded; qed");
+
 			// If Council mainchain membership has changed
 			if council_mainchain_members_have_changed {
-				CouncilMainchainMembers::<T>::put(&council_mainchain_members);
+				CouncilMainchainMembers::<T>::put(&council_mainchain_members_bound);
 			}
 
 			let council_has_changed =
@@ -244,21 +250,21 @@ pub mod pallet {
 
 				actual_weight =
 					actual_weight.saturating_add(T::WeightInfo::reset_members_only_council(
-						council_account_ids.len() as u32,
-						technical_committee_account_ids.len() as u32,
+						council_members_len,
+						technical_committee_members_len,
 					));
 			}
 
-			// Prepare Technical Committee members
-			let mut technical_committee_members: BoundedVec<
-				T::AccountId,
-				T::TechnicalCommitteeMaxMembers,
-			> = BoundedVec::try_from(technical_committee_account_ids.clone())
-				.map_err(|_| Error::<T>::TooManyMembers)?;
-
+			// ---- Technical Committee ----
 			// Make sure an empty set of members is not allowed
 			ensure!(!technical_committee_members.is_empty(), Error::<T>::EmptyMembers);
 			technical_committee_members.sort();
+
+			// Make sure there are not duplicated members
+			ensure!(
+				!Self::has_duplicated_members(technical_committee_authorities),
+				Error::<T>::DuplicatedMembers
+			);
 
 			let technical_committee_current_members =
 				T::TechnicalCommitteeMembershipHandler::sorted_members();
@@ -266,13 +272,6 @@ pub mod pallet {
 			let technical_committee_members_have_changed = technical_committee_current_members
 				.as_slice()
 				!= technical_committee_members.as_slice();
-
-			// Prepare technical committee mainchain members
-			let technical_committee_mainchain_members: BoundedVec<
-				MainchainMember,
-				T::TechnicalCommitteeMaxMembers,
-			> = BoundedVec::try_from(technical_committee_mainchain_members.clone())
-				.map_err(|_| Error::<T>::TooManyMembers)?;
 
 			// Make sure an empty set of mainchain members is not allowed
 			ensure!(!technical_committee_mainchain_members.is_empty(), Error::<T>::EmptyMembers);
@@ -292,10 +291,18 @@ pub mod pallet {
 				);
 			}
 
+			let technical_committee_mainchain_members_bound: BoundedVec<
+				MainchainMember,
+				T::TechnicalCommitteeMaxMembers,
+			> = technical_committee_mainchain_members
+				.clone()
+				.try_into()
+				.expect("call arg technical_committee_authorities is bounded; qed");
+
 			// If Technical Committee mainchain membership has changed
 			if technical_committee_mainchain_members_have_changed {
 				TechnicalCommitteeMainchainMembers::<T>::put(
-					&technical_committee_mainchain_members,
+					&technical_committee_mainchain_members_bound,
 				);
 			}
 
@@ -310,8 +317,8 @@ pub mod pallet {
 
 				actual_weight = actual_weight.saturating_add(
 					T::WeightInfo::reset_members_only_technical_committee(
-						council_account_ids.len() as u32,
-						technical_committee_account_ids.len() as u32,
+						council_members_len,
+						technical_committee_members_len,
 					),
 				);
 			}
@@ -319,8 +326,8 @@ pub mod pallet {
 			// If nothing changed, return correct weight
 			if !council_has_changed && !technical_committee_has_changed {
 				actual_weight = T::WeightInfo::reset_members_none(
-					council_account_ids.len() as u32,
-					technical_committee_account_ids.len() as u32,
+					council_members_len,
+					technical_committee_members_len,
 				);
 			}
 
@@ -387,13 +394,22 @@ pub mod pallet {
 			// Extract and validate the federated authority data from inherent
 			let fed_auth_data = Self::get_data_from_inherent_data(data).unwrap_or_default()?;
 
-			let council_authorities =
-				Self::decode_auth_accounts(fed_auth_data.council_authorities).ok()?;
+			let council_authorities: BoundedVec<
+				(T::AccountId, MainchainMember),
+				T::CouncilMaxMembers,
+			> = Self::decode_auth_members(fed_auth_data.council_authorities).ok()?;
 
-			let technical_committee_authorities =
-				Self::decode_auth_accounts(fed_auth_data.technical_committee_authorities).ok()?;
+			let technical_committee_authorities: BoundedVec<
+				(T::AccountId, MainchainMember),
+				T::TechnicalCommitteeMaxMembers,
+			> = Self::decode_auth_members(fed_auth_data.technical_committee_authorities).ok()?;
 
-			if !council_authorities.is_empty() && !technical_committee_authorities.is_empty() {
+			let has_empty_members =
+				council_authorities.is_empty() || technical_committee_authorities.is_empty();
+			let has_duplicated_members = Self::has_duplicated_members(council_authorities.clone())
+				|| Self::has_duplicated_members(technical_committee_authorities.clone());
+
+			if !has_empty_members && !has_duplicated_members {
 				Some(Call::reset_members { council_authorities, technical_committee_authorities })
 			} else {
 				None
@@ -405,13 +421,47 @@ pub mod pallet {
 		}
 
 		fn check_inherent(
-			_call: &Self::Call,
+			call: &Self::Call,
 			data: &sp_inherents::InherentData,
 		) -> Result<(), Self::Error> {
 			// Validate the federated authority data from inherent
 			if let Some(fed_auth_data) = Self::get_data_from_inherent_data(data)? {
-				let _ = Self::decode_auth_accounts(fed_auth_data.council_authorities)?;
-				let _ = Self::decode_auth_accounts(fed_auth_data.technical_committee_authorities)?;
+				let council_authorities = Self::decode_auth_members::<T::CouncilMaxMembers>(
+					fed_auth_data.council_authorities,
+				)?;
+				let technical_committee_authorities =
+					Self::decode_auth_members::<T::TechnicalCommitteeMaxMembers>(
+						fed_auth_data.technical_committee_authorities,
+					)?;
+
+				let (expected_council_authorities, expected_technical_committee_authorities) =
+					match call {
+						Call::reset_members {
+							council_authorities,
+							technical_committee_authorities,
+						} => (council_authorities, technical_committee_authorities),
+						_ => return Ok(()),
+					};
+
+				if council_authorities != *expected_council_authorities {
+					log::error!(
+						target: "federated-authority-observation",
+						"Council Authorities mismatch - expected {:?}, got {:?}",
+						*expected_council_authorities,
+						council_authorities
+					);
+					return Err(Self::Error::CouncilMembersMismatch);
+				}
+
+				if technical_committee_authorities != *expected_technical_committee_authorities {
+					log::error!(
+						target: "federated-authority-observation",
+						"Technical Committee mismatch - expected {:?}, got {:?}",
+						*expected_technical_committee_authorities,
+						technical_committee_authorities
+					);
+					return Err(Self::Error::TechnicalCommitteeMembersMismatch);
+				}
 			}
 
 			Ok(())
@@ -426,11 +476,11 @@ pub mod pallet {
 				.map_err(|_| InherentError::DecodeFailed)
 		}
 
-		/// Transform `Vec<(AuthorityMemberPublicKey, MainchainMember)>` into `Vec<(T::AccountId, MainchainMember)>`
-		fn decode_auth_accounts(
+		/// Transform `Vec<(AuthorityMemberPublicKey, MainchainMember)>` into `BoundedVec<(T::AccountId, MainchainMember), MAX>`
+		fn decode_auth_members<MAX: Get<u32>>(
 			auth_data: Vec<(AuthorityMemberPublicKey, MainchainMember)>,
-		) -> Result<Vec<(T::AccountId, MainchainMember)>, InherentError> {
-			auth_data
+		) -> Result<BoundedVec<(T::AccountId, MainchainMember), MAX>, InherentError> {
+			let members = auth_data
 				.into_iter()
 				.map(|(key, mainchain_member)| {
 					T::AccountId::decode(&mut &key.0[..])
@@ -444,16 +494,27 @@ pub mod pallet {
 							InherentError::DecodeFailed
 						})
 				})
-				.collect::<Result<Vec<_>, _>>()
+				.collect::<Result<Vec<(T::AccountId, _)>, _>>()?;
+
+			members.clone().try_into().map_err(|_| {
+				log::error!(
+					target: "federated-authority-observation",
+					"Too many members: {:?}",
+					members
+				);
+				InherentError::TooManyMembers
+			})
 		}
 
-        /// Check if there are duplicated members in the set
-        fn there_are_duplicate_members<M: Ord, MAX>(members: BoundedVec<M, MAX>) -> bool {
-            use sp_std::collections::btree_set::BTreeSet;
-            let members_vec_len = members.len();
-			let members_set: BTreeSet<M> = members.into_iter().collect();
-			
+		/// Check if there are duplicated members in the set
+		fn has_duplicated_members<S: Ord, M, MAX>(members: BoundedVec<(S, M), MAX>) -> bool {
+			use sp_std::collections::btree_set::BTreeSet;
+			// Only check Substrate/Midnight members
+			let (members, _): (Vec<_>, Vec<_>) = members.into_iter().unzip();
+			let members_vec_len = members.len();
+			let members_set: BTreeSet<S> = members.into_iter().collect();
+
 			members_set.len() != members_vec_len
-        }
+		}
 	}
 }
