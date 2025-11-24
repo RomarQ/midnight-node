@@ -483,7 +483,6 @@ fn process_tokens_inherent_should_update_storage_correctly() {
 }
 
 #[test]
-#[ignore = "Falky test - Ignored until fixed"]
 fn removing_duplicate_registration_results_in_valid_registration() {
 	new_test_ext().execute_with(|| {
 		init_ledger_state();
@@ -717,7 +716,6 @@ fn emits_registration_and_mapping_added_on_first_valid_registration() {
 }
 
 #[test]
-#[ignore = "Falky test - Ignored until fixed"]
 fn emits_deregistration_and_mapping_removed_on_last_mapping_removed() {
 	new_test_ext().execute_with(|| {
 		let (cardano_reward_address, dust_public_key) = test_wallet_pairing();
