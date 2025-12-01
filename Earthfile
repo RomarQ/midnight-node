@@ -142,6 +142,7 @@ node-image-minimal:
     FROM DOCKERFILE -f ./images/node/Dockerfile .
     USER root
 
+    RUN mkdir -p /node
     COPY +build-node-only/artifacts-$NATIVEARCH/midnight-node /
 
     RUN chown -R appuser:appuser /midnight-node /node ./bin ./res
