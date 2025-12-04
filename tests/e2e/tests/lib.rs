@@ -713,7 +713,7 @@ async fn alice_cannot_deregister_bob() {
 async fn removing_excessive_registrations() {
     let settings = Settings::default();
     let cardano_client = CardanoClient::new(settings.ogmios_client, settings.constants).await;
-    let midnight_client = MidnightClient::new(settings.node_client).await;
+    let mut midnight_client = MidnightClient::new(settings.node_client).await;
     let address_bech32 = cardano_client.address_as_bech32();
     println!("New Cardano wallet created: {:?}", address_bech32);
 
@@ -959,7 +959,7 @@ async fn removing_excessive_registrations() {
     println!("Calculated nonce for cNIGHT UTXO: {}", nonce);
 
     let utxo_owner = midnight_client
-        .poll_utxo_owners_until_change(nonce, None, 60, 1000)
+        .poll_utxo_owners_until_change(nonce)
         .await
         .expect("Failed to poll UTXO owners");
     println!("Queried UTXO owners from Midnight node: {:?}", utxo_owner);

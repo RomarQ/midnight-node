@@ -163,7 +163,7 @@ impl MidnightClient {
         &self,
         utxo: &String,
     ) -> Result<Option<UtxoOwners>, Box<dyn std::error::Error>> {
-        let nonce = hex::decode(&utxo).unwrap();
+        let nonce = hex::decode(utxo).unwrap();
         let storage_address = mn_meta::storage()
             .c_night_observation()
             .utxo_owners(H256(nonce.try_into().unwrap()));

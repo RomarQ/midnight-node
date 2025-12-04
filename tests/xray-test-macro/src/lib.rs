@@ -4,7 +4,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::parse_quote;
 use syn::punctuated::Punctuated;
-use syn::{parenthesized, parse_macro_input, ItemFn, LitStr, Result, Token};
+use syn::{ItemFn, LitStr, Result, Token, parenthesized, parse_macro_input};
 
 struct XrayTest {
 	key: Option<LitStr>,

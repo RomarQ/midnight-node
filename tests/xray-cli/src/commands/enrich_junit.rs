@@ -293,14 +293,12 @@ some other log...
 		let mut map = std::collections::HashMap::new();
 
 		for child in props_elem.children.iter() {
-			if let XMLNode::Element(e) = child {
-				if e.name == ELEM_PROPERTY {
-					if let Some(name) = e.attributes.get(ATTR_NAME) {
-						if let Some(value) = e.attributes.get(ATTR_VALUE) {
-							map.insert(name.clone(), value.clone());
-						}
-					}
-				}
+			if let XMLNode::Element(e) = child
+				&& e.name == ELEM_PROPERTY
+				&& let Some(name) = e.attributes.get(ATTR_NAME)
+				&& let Some(value) = e.attributes.get(ATTR_VALUE)
+			{
+				map.insert(name.clone(), value.clone());
 			}
 		}
 

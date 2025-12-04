@@ -51,13 +51,12 @@ impl CardanoClient {
             Duration::from_secs(ogmios_settings.timeout_seconds.into()),
         )
         .await
-        .expect(
-            format!(
+        .unwrap_or_else(|_| {
+            panic!(
                 "Failed to initialize client, url: {}",
                 ogmios_settings.base_url
             )
-            .as_str(),
-        );
+        });
 
         let wallet = Self::create_wallet();
         Self::from_wallet(ogmios_settings, constants, wallet, ogmios_clients)
