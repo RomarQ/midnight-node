@@ -19,6 +19,8 @@ members = [
     "util/documented",
     "util/upgrader",
     "tests/e2e",
+    "tests/xray-cli",
+    "tests/xray-test-macro",
     "relay",
     "docs",
 ]

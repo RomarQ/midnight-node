@@ -1,2 +1,7 @@
 [profile.ci.junit]  # this can be some other profile, too
 path = "test-results-node.xml"
+
+[profile.e2e.junit]
+path = "e2e-tests-results.xml"
+store-success-output = true
+store-failure-output = true
