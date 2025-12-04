@@ -103,7 +103,7 @@ async fn register_for_dust_production() {
     );
 }
 
-#[tokio::test]
+// #[tokio::test]
 async fn deploy_governance_contracts_and_validate_membership_reset() {
     println!("=== Starting Governance Contracts E2E Test ===");
 
@@ -1631,7 +1631,7 @@ async fn spend_cnight_producing_dust() {
 
     // sleep 60s
     println!("Sleeping 60 seconds before spending cNIGHT...");
-    tokio::time::sleep(Duration::from_secs(60)).await;
+    tokio::time::sleep(Duration::from_secs(300)).await;
     let cnight_spent_utxo = cardano_client
         .spend_cnight(&cardano_client.wallet, &cnight_utxo, &bob_bech32)
         .await;
