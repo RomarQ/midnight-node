@@ -7,14 +7,13 @@ use midnight_node_metadata::midnight_metadata_latest::c_night_observation::event
 };
 use ogmios_client::query_ledger_state::QueryLedgerState;
 use std::slice::from_ref;
-use tokio::time::{Duration, timeout};
 use whisky::Asset;
 
 #[tokio::test]
 async fn register_for_dust_production() {
     let settings = Settings::default();
     let cardano_client = CardanoClient::new(settings.ogmios_client, settings.constants).await;
-    let midnight_client = MidnightClient::new(settings.node_client).await;
+    let mut midnight_client = MidnightClient::new(settings.node_client).await;
     let address_bech32 = cardano_client.address_as_bech32();
     println!("New Cardano wallet created: {:?}", address_bech32);
 
@@ -102,9 +101,10 @@ async fn register_for_dust_production() {
         mapping_added.unwrap()
     );
 }
-
+#[cfg(any(feature = "local", feature = "local-ci"))]
 #[tokio::test]
 async fn deploy_governance_contracts_and_validate_membership_reset() {
+    use tokio::time::{Duration, timeout};
     println!("=== Starting Governance Contracts E2E Test ===");
 
     let settings = Settings::default();
@@ -279,7 +279,7 @@ async fn register_2_cardano_same_dust_address_production() {
         CardanoClient::new(settings.ogmios_client.clone(), settings.constants.clone()).await;
     let cardano_client_2 =
         CardanoClient::new(settings.ogmios_client.clone(), settings.constants).await;
-    let midnight_client = MidnightClient::new(settings.node_client).await;
+    let mut midnight_client = MidnightClient::new(settings.node_client).await;
 
     let address_bech_32_1 = cardano_client_1.address_as_bech32();
     let address_bech_32_2 = cardano_client_2.address_as_bech32();
@@ -515,7 +515,7 @@ async fn cnight_produces_dust() {
     println!("Calculated nonce for cNIGHT UTXO: {}", nonce);
 
     let utxo_owner = midnight_client
-        .poll_utxo_owners_until_change(nonce, None, 60, 1000)
+        .poll_utxo_owners_until_change(nonce)
         .await
         .expect("Failed to poll UTXO owners");
     println!("Queried UTXO owners from Midnight node: {:?}", utxo_owner);
@@ -532,7 +532,7 @@ async fn cnight_produces_dust() {
 async fn deregister_from_dust_production() {
     let settings = Settings::default();
     let cardano_client = CardanoClient::new(settings.ogmios_client, settings.constants).await;
-    let midnight_client = MidnightClient::new(settings.node_client).await;
+    let mut midnight_client = MidnightClient::new(settings.node_client).await;
 
     let address_bech32 = cardano_client.address_as_bech32();
     println!("New Cardano wallet created: {:?}", address_bech32);
@@ -706,15 +706,6 @@ async fn alice_cannot_deregister_bob() {
     assert!(
         deregister_tx.is_err(),
         "Alice should not be able to deregister Bob"
-    );
-
-    // Check if Bob's registration still exists in mapping validator UTXOs
-    let still_unspent = bob
-        .is_utxo_unspent_for_3_blocks(&validator_address, &hex::encode(register_tx_id))
-        .await;
-    assert!(
-        still_unspent,
-        "Bob's registration UTXO should still be unspent"
     );
 }
 

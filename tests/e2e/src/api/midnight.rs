@@ -14,18 +14,33 @@ use subxt::blocks::ExtrinsicEvents;
 use subxt::utils::H256;
 use subxt::{OnlineClient, SubstrateConfig};
 use tokio::time::{sleep, timeout, Instant};
+use crate::utils::retry_async;
 
 pub struct MidnightClient {
+    pub base_url: String,
     pub online_client: OnlineClient<SubstrateConfig>,
+    pub timeout_seconds: u16,
 }
 
 impl MidnightClient {
     pub async fn new(node_settings: NodeClientSettings) -> Self {
-        let online_client =
-            OnlineClient::<SubstrateConfig>::from_insecure_url(node_settings.base_url)
-                .await
-                .expect("Failed to initialize client");
-        Self { online_client }
+        let base_url = node_settings.base_url;
+        let online_client = OnlineClient::<SubstrateConfig>::from_insecure_url(base_url.clone())
+            .await
+            .expect("Failed to initialize client");
+        let timeout_seconds = node_settings.timeout_seconds;
+        Self {
+            base_url,
+            online_client,
+            timeout_seconds,
+        }
+    }
+
+    async fn reconnect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("Reconnecting OnlineClient...");
+        self.online_client =
+            OnlineClient::<SubstrateConfig>::from_insecure_url(self.base_url.clone()).await?;
+        Ok(())
     }
 
     pub fn new_dust_hex() -> String {
@@ -34,67 +49,90 @@ impl MidnightClient {
     }
 
     pub async fn subscribe_to_cnight_observation_events(
-        &self,
+        &mut self,
         tx_id: &[u8],
     ) -> Result<ExtrinsicEvents<SubstrateConfig>, Box<dyn std::error::Error>> {
         println!(
             "Subscribing for cNIGHT observation extrinsic with tx_id: 0x{}",
             hex::encode(tx_id)
         );
+        let total_timeout = Duration::from_secs(self.timeout_seconds.into());
+        let deadline = Instant::now() + total_timeout;
+
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| "Timeout waiting for registration event".to_string())?;
+
+            let res = timeout(remaining, self.single_subscription_attempt(tx_id)).await;
+
+            match res {
+                Ok(Ok(events)) => return Ok(events),
+                Ok(Err(e)) => {
+                    if e.to_string().contains("Connection reset by peer") {
+                        self.reconnect().await?;
+                    }
+                    eprintln!(
+                        "Subscription ended early, but it will continue when there's remaining time: {e}"
+                    );
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(_) => return Err("Timeout waiting for registration event".into()),
+            }
+        }
+    }
+    async fn single_subscription_attempt(
+        &self,
+        tx_id: &[u8],
+    ) -> Result<ExtrinsicEvents<SubstrateConfig>, Box<dyn std::error::Error>> {
         let mut blocks_sub = self.online_client.blocks().subscribe_finalized().await?;
 
-        let inner = async {
-            while let Some(block_result) = blocks_sub.next().await {
-                let block = block_result?;
+        while let Some(block_result) = blocks_sub.next().await {
+            let block = block_result?;
 
-                let block_number = block.header().number;
-                println!("Finalized block #{}", block_number);
+            let block_number = block.header().number;
+            println!("Finalized block #{}", block_number);
 
-                let extrinsic = block.extrinsics().await?;
+            let extrinsic = block.extrinsics().await?;
 
-                for ext in extrinsic.iter() {
-                    let Ok(decoded) = ext.as_root_extrinsic::<mn_meta::Call>() else {
-                        continue;
-                    };
+            for ext in extrinsic.iter() {
+                let Ok(decoded) = ext.as_root_extrinsic::<mn_meta::Call>() else {
+                    continue;
+                };
 
-                    let Some(utxos) = MidnightClient::extract_process_tokens_utxos(&decoded) else {
-                        continue;
-                    };
+                let Some(utxos) = MidnightClient::extract_process_tokens_utxos(&decoded) else {
+                    continue;
+                };
 
+                println!(
+                    "  NativeTokenObservation::process_tokens called with {} UTXOs",
+                    utxos.len()
+                );
+
+                if utxos.is_empty() {
+                    continue;
+                }
+
+                if utxos.iter().any(|u| u.header.tx_hash.0 == tx_id) {
                     println!(
-                        "  NativeTokenObservation::process_tokens called with {} UTXOs",
-                        utxos.len()
+                        "*** Found UTXO with matching registration tx hash: 0x{} ***",
+                        hex::encode(tx_id)
                     );
-
-                    if utxos.is_empty() {
-                        continue;
-                    }
-
-                    if utxos.iter().any(|u| u.header.tx_hash.0 == tx_id) {
+                    let events = ext.events().await?;
+                    return Ok(events);
+                } else {
+                    for u in utxos {
+                        let seen = u.header.tx_hash.0;
                         println!(
-                            "*** Found UTXO with matching registration tx hash: 0x{} ***",
+                            "Tx hash 0x{} does not match expected registration tx hash 0x{}",
+                            hex::encode(seen),
                             hex::encode(tx_id)
                         );
-                        let events = ext.events().await?;
-                        return Ok(events);
-                    } else {
-                        for u in utxos {
-                            let seen = u.header.tx_hash.0;
-                            println!(
-                                "Tx hash 0x{} does not match expected registration tx hash 0x{}",
-                                hex::encode(seen),
-                                hex::encode(tx_id)
-                            );
-                        }
                     }
                 }
             }
-            Err("Did not find registration event".into())
-        };
-
-        timeout(Duration::from_secs(60), inner)
-            .await
-            .unwrap_or_else(|_| Err("Timeout waiting for registration event".into()))
+        }
+        Err("Subscription ended before finding registration event".into())
     }
 
     pub fn calculate_nonce(prefix: &[u8], tx_hash: [u8; 32], tx_index: u16) -> String {
@@ -123,7 +161,7 @@ impl MidnightClient {
 
     pub async fn query_night_utxo_owners(
         &self,
-        utxo: String,
+        utxo: &String,
     ) -> Result<Option<UtxoOwners>, Box<dyn std::error::Error>> {
         let nonce = hex::decode(&utxo).unwrap();
         let storage_address = mn_meta::storage()
@@ -144,24 +182,36 @@ impl MidnightClient {
     pub async fn poll_utxo_owners_until_change(
         &self,
         utxo: String,
-        initial_value: Option<UtxoOwners>,
-        timeout_secs: u64,
-        poll_interval_ms: u64,
     ) -> Result<Option<UtxoOwners>, Box<dyn std::error::Error>> {
-        let start = Instant::now();
-        loop {
-            let current_value = self.query_night_utxo_owners(utxo.clone()).await?;
-            if current_value.as_ref().map(|v| v.0.0.clone())
-                != initial_value.as_ref().map(|v| v.0.0.clone())
-            {
-                println!("UtxoOwners storage changed: {:?}", current_value);
-                return Ok(current_value);
+        retry_async(|| self.utxo_owners_changed(&utxo), self.timeout_seconds, 10).await
+    }
+
+    pub async fn utxo_owners_change_with_reconnect(
+        &mut self,
+        utxo: &String,
+    ) -> Result<Option<UtxoOwners>, Box<dyn std::error::Error>> {
+        let result = self.utxo_owners_changed(utxo).await;
+        match result {
+            Ok(owners) => Ok(owners),
+            Err(e) => {
+                if e.to_string().contains("restart required") {
+                    self.reconnect().await?;
+                }
+                Err(e)
             }
-            if start.elapsed() > Duration::from_secs(timeout_secs) {
-                println!("Timeout reached without change");
-                return Ok(current_value);
-            }
-            sleep(Duration::from_millis(poll_interval_ms)).await;
+        }
+    }
+
+    pub async fn utxo_owners_changed(
+        &self,
+        utxo: &String,
+    ) -> Result<Option<UtxoOwners>, Box<dyn std::error::Error>> {
+        let current_value = self.query_night_utxo_owners(utxo).await?;
+        if current_value.as_ref().map(|v| v.0.0.clone()).is_some() {
+            println!("UtxoOwners storage changed: {:?}", current_value);
+            Ok(current_value)
+        } else {
+            Err("UtxoOwners is not present".into())
         }
     }
 
@@ -169,10 +219,9 @@ impl MidnightClient {
         &self,
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("Subscribing to federated authority observation events");
-
         let mut blocks_sub = self.online_client.blocks().subscribe_finalized().await?;
 
-        let result = timeout(Duration::from_secs(120), async {
+        let result = timeout(Duration::from_secs(self.timeout_seconds.into()), async {
             while let Some(block) = blocks_sub.next().await {
                 let block = block?;
                 let block_number = block.header().number;

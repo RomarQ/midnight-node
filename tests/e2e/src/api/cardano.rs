@@ -1,4 +1,5 @@
 use crate::config::{Constants, OgmiosClientSettings};
+use crate::utils::retry_async;
 use bip39::{Language, Mnemonic, MnemonicType};
 use ogmios_client::OgmiosClientError;
 use ogmios_client::jsonrpsee::{OgmiosClients, client_for_url};
@@ -31,6 +32,9 @@ impl From<std::io::Error> for GetUtxoError {
     }
 }
 
+const RETRIES: u16 = 100;
+const PAUSE_SECONDS: u16 = 1;
+
 pub struct CardanoClient {
     pub ogmios_clients: OgmiosClients,
     pub constants: Constants,
@@ -44,10 +48,16 @@ impl CardanoClient {
     pub async fn new(ogmios_settings: OgmiosClientSettings, constants: Constants) -> Self {
         let ogmios_clients = client_for_url(
             &ogmios_settings.base_url,
-            Duration::from_secs(ogmios_settings.timeout_seconds),
+            Duration::from_secs(ogmios_settings.timeout_seconds.into()),
         )
         .await
-        .expect("Failed to initialize client");
+        .expect(
+            format!(
+                "Failed to initialize client, url: {}",
+                ogmios_settings.base_url
+            )
+            .as_str(),
+        );
 
         let wallet = Self::create_wallet();
         Self::from_wallet(ogmios_settings, constants, wallet, ogmios_clients)
@@ -59,7 +69,7 @@ impl CardanoClient {
     ) -> Self {
         let ogmios_clients = client_for_url(
             &ogmios_settings.base_url,
-            Duration::from_secs(ogmios_settings.timeout_seconds),
+            Duration::from_secs(ogmios_settings.timeout_seconds.into()),
         )
         .await
         .expect("Failed to initialize client");
@@ -74,7 +84,7 @@ impl CardanoClient {
         wallet: Wallet,
         ogmios_clients: OgmiosClients,
     ) -> Self {
-        let network_info = Self::network_info(&ogmios_settings.network);
+        let network_info = ogmios_settings.network_info;
         let address = Self::address(&wallet, network_info.network_id());
 
         Self {
@@ -84,15 +94,6 @@ impl CardanoClient {
             address,
             network: ogmios_settings.network,
             network_info,
-        }
-    }
-
-    fn network_info(network: &Network) -> NetworkInfo {
-        match network {
-            Network::Mainnet => NetworkInfo::mainnet(),
-            Network::Preprod => NetworkInfo::testnet_preprod(),
-            Network::Preview => NetworkInfo::testnet_preview(),
-            Network::Custom(_) => panic!("Custom networks are not supported"),
         }
     }
 
@@ -124,10 +125,11 @@ impl CardanoClient {
     }
 
     pub async fn fund_wallet(&self, assets: Vec<Asset>) -> Option<OgmiosUtxo> {
-        let tx_id_hex = match self.send(assets).await {
-            Ok(response) => hex::encode(response.transaction.id),
-            Err(e) => panic!("Failed to send assets: {:?}", e),
-        };
+        let tx_id_hex =
+            match retry_async(|| self.send(assets.clone()), RETRIES, PAUSE_SECONDS).await {
+                Ok(response) => hex::encode(response.transaction.id),
+                Err(e) => panic!("Failed to send assets: {:?}", e),
+            };
         println!("Funded wallet with transaction id: {}", tx_id_hex);
         self.find_utxo_by_tx_id(&self.address_as_bech32(), tx_id_hex)
             .await
@@ -171,11 +173,11 @@ impl CardanoClient {
             Asset::new_from_str(&auth_token_policy_id, "1"),
         ];
         let minting_script = policies.auth_token_cbor_double_encoding();
-        let network = Network::Custom(self.constants.cost_model.clone());
+        let network = self.network.clone();
 
         let mut tx_builder = TxBuilder::new_core();
         tx_builder
-            .network(network.clone())
+            .network(network)
             .set_evaluator(Box::new(OfflineTxEvaluator::new()))
             .tx_in(
                 &hex::encode(tx_in.transaction.id),
@@ -225,7 +227,7 @@ impl CardanoClient {
         let auth_token_policy_id = policies.auth_token_policy_id();
         let send_assets = vec![Asset::new_from_str("lovelace", "2000000")];
         let minting_script = policies.auth_token_cbor_double_encoding();
-        let network = Network::Custom(self.constants.cost_model.clone());
+        let network = self.network.clone();
         let mapping_validator_cbor = policies.auth_token_cbor_double_encoding();
         let register_asset_tx_vector = Self::build_asset_vector(register_tx);
         println!("Register tx assets: {:?}", register_asset_tx_vector);
@@ -234,7 +236,7 @@ impl CardanoClient {
 
         let mut tx_builder = TxBuilder::new_core();
         tx_builder
-            .network(network.clone())
+            .network(network)
             .set_evaluator(Box::new(OfflineTxEvaluator::new()))
             .tx_in(
                 &hex::encode(tx_in.transaction.id),
@@ -296,7 +298,7 @@ impl CardanoClient {
 
         let policy_id = policies.cnight_token_policy_id();
         let minting_script = policies.cnight_token_cbor;
-        let network = Network::Custom(self.constants.cost_model.clone());
+        let network = self.network.clone();
 
         let payment_addr = self.address_as_bech32();
         let collateral_utxo = match self.make_collateral().await {
@@ -330,7 +332,7 @@ impl CardanoClient {
 
         let mut tx_builder = whisky::TxBuilder::new_core();
         tx_builder
-            .network(network.clone())
+            .network(network)
             .set_evaluator(Box::new(OfflineTxEvaluator::new()))
             .tx_in(
                 &input_tx_hash,
@@ -403,11 +405,9 @@ impl CardanoClient {
     }
 
     pub async fn find_utxo_by_tx_id(&self, address: &str, tx_id_hex: String) -> Option<OgmiosUtxo> {
-        const MAX_ATTEMPTS: u32 = 10;
-        const PAUSE: Duration = Duration::from_secs(1);
         let tx_id_bytes = hex::decode(tx_id_hex).expect("invalid hex tx_id");
 
-        for _ in 0..MAX_ATTEMPTS {
+        for _ in 0..RETRIES {
             let utxos = self
                 .ogmios_clients
                 .query_utxos(&[address.into()])
@@ -420,7 +420,7 @@ impl CardanoClient {
             {
                 return Some(found);
             }
-            sleep(PAUSE).await;
+            sleep(Duration::from_secs(PAUSE_SECONDS.into())).await;
         }
         None
     }
@@ -443,53 +443,6 @@ impl CardanoClient {
             Asset::new_from_str("lovelace", &utxo.value.lovelace.to_string()),
         );
         assets
-    }
-
-    pub async fn is_utxo_unspent_for_3_blocks(&self, address: &str, tx_id: &str) -> bool {
-        // Get the current block number (slot) as the starting point
-        const SLOTS_NUMBER: u64 = 3;
-        const LIMIT: i32 = 5;
-        let start_slot = self.ogmios_clients.get_tip().await.unwrap().slot;
-        println!(
-            "Current slot is {}. Waiting for {} more slots (limit {} checks)...",
-            start_slot, SLOTS_NUMBER, LIMIT
-        );
-
-        let target = start_slot
-            .checked_add(SLOTS_NUMBER)
-            .expect("start_slot + SLOTS_NUMBER overflowed");
-
-        let mut last_slot = start_slot;
-        for iteration in 0..=LIMIT {
-            let tip = self.ogmios_clients.get_tip().await.unwrap();
-
-            if tip.slot > last_slot {
-                println!("Slot advanced: {} -> {}", last_slot, tip.slot);
-                last_slot = tip.slot;
-
-                if last_slot >= target {
-                    break;
-                }
-            }
-            sleep(Duration::from_secs(1)).await;
-            if iteration == LIMIT {
-                panic!("Limit reached and nr: {} as target was not reached", target);
-            }
-        }
-
-        // After 3 slots, check if the UTXO is still present
-        let utxos = self
-            .ogmios_clients
-            .query_utxos(&[address.into()])
-            .await
-            .unwrap();
-        let still_unspent = utxos.iter().any(|u| hex::encode(u.transaction.id) == tx_id);
-        if still_unspent {
-            println!("UTXO {} is still unspent after 3 slots.", tx_id);
-        } else {
-            println!("UTXO {} was spent within 3 slots.", tx_id);
-        }
-        still_unspent
     }
 
     /// Retrieve the pre-created one-shot UTxO from the local environment
@@ -633,11 +586,11 @@ impl CardanoClient {
             Asset::new_from_str(policy_id, "1"),        // The governance NFT
         ];
 
-        let network = Network::Custom(self.constants.cost_model.clone());
+        let network = self.network.clone();
 
         let mut tx_builder = TxBuilder::new_core();
         tx_builder
-            .network(network.clone())
+            .network(network)
             .set_evaluator(Box::new(OfflineTxEvaluator::new()))
             // Add regular input for fees
             .tx_in(

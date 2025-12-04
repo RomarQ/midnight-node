@@ -8,6 +8,7 @@ autotests = false
 [features]
 local = []
 local-ci = []
+preview = []
 default = ["local-ci"]
 
 [dependencies]
