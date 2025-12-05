@@ -276,6 +276,61 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  faucet:
+    profiles: ["withindexer"]
+    container_name: faucet
+    image: midnight-faucet
+    ports:
+      - "5300:5300"
+    environment:
+      NODE_URL: "ws://midnight-node-1:9944"
+      INDEXER_URL: "http://indexer-api:8088/api/v3/graphql"
+      PROVING_SERVER_URL: "http://proof-server:6300"
+      DB_HOST: "faucet-db"
+      PRINT_CONFIG: "true"
+      MAX_CONCURRENT_TASKS: 1,
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5300/api/health"]
+      interval: 1s
+      timeout: 1s
+      retries: 0
+      start_period: 30s
+    depends_on:
+      faucet-db:
+        condition: service_started
+      midnight-node-1:
+        condition: service_started
+      indexer-api:
+        condition: service_started
+      proof-server:
+        condition: service_started
+
+  faucet-db:
+    container_name: faucet-db
+    image: postgres:15
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: faucet
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: faucet
+
+  proof-server:
+    profiles: ["withindexer"]
+    image: "ghcr.io/midnight-ntwrk/proof-server:6.1.0-alpha.6"
+    container_name: proof-server
+    command: ["midnight-proof-server -v"]
+    ports:
+      - "6300"
+    environment:
+      RUST_BACKTRACE: "full"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6300/version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   midnight-node-1:
     container_name: midnight-node-1
     image: ${MIDNIGHT_NODE_IMAGE}
