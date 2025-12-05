@@ -230,7 +230,6 @@ impl CardanoClient {
 
         let mut tx_builder = TxBuilder::new_core();
         tx_builder
-            .network(network.clone())
             .set_evaluator(Box::new(OfflineTxEvaluator::new()))
             .tx_in(
                 &hex::encode(tx_in.transaction.id),
@@ -307,7 +306,6 @@ impl CardanoClient {
 
         let mut tx_builder = TxBuilder::new_core();
         tx_builder
-            .network(network.clone())
             .set_evaluator(Box::new(OfflineTxEvaluator::new()))
             .tx_in(
                 &hex::encode(tx_in.transaction.id),
@@ -421,7 +419,6 @@ impl CardanoClient {
 
         let mut tx_builder = whisky::TxBuilder::new_core();
         tx_builder
-            .network(network.clone())
             .set_evaluator(Box::new(OfflineTxEvaluator::new()))
             .tx_in(
                 &input_tx_hash,
@@ -494,7 +491,7 @@ impl CardanoClient {
     }
 
     pub async fn find_utxo_by_tx_id(&self, address: &str, tx_id_hex: String) -> Option<OgmiosUtxo> {
-        const MAX_ATTEMPTS: u32 = 10;
+        const MAX_ATTEMPTS: u32 = 120;
         const PAUSE: Duration = Duration::from_secs(1);
         let tx_id_bytes = hex::decode(tx_id_hex).expect("invalid hex tx_id");
 
@@ -536,10 +533,75 @@ impl CardanoClient {
         assets
     }
 
+    pub async fn rotate_cnight(&self, wallet: &Wallet, utxo: &OgmiosUtxo) -> [u8; 32] {
+        let payment_addr = self.address_as_bech32();
+        let input_tx_hash = hex::encode(utxo.transaction.id);
+        let input_index = utxo.index;
+        let input_assets = &Self::build_asset_vector(utxo);
+        let mut tx_builder = whisky::TxBuilder::new_core();
+        tx_builder
+            .set_evaluator(Box::new(OfflineTxEvaluator::new()))
+            .tx_in(
+                &input_tx_hash,
+                input_index.into(),
+                &input_assets,
+                &payment_addr,
+            )
+            // .tx_out(&payment_addr, &assets)
+            .change_address(&payment_addr)
+            .complete_sync(None)
+            .unwrap();
+
+        let signed_tx = wallet.sign_tx(&tx_builder.tx_hex());
+        let tx_bytes = hex::decode(signed_tx.unwrap()).expect("Failed to decode hex string");
+        let response = self
+            .ogmios_clients
+            .submit_transaction(&tx_bytes)
+            .await
+            .unwrap();
+        println!("Transaction submitted, response: {:?}", response);
+        response.transaction.id
+    }
+
+    pub async fn spend_cnight(
+        &self,
+        wallet: &Wallet,
+        utxo: &OgmiosUtxo,
+        recipient_address: &str,
+    ) -> [u8; 32] {
+        let payment_addr = self.address_as_bech32();
+        let input_tx_hash = hex::encode(utxo.transaction.id);
+        let input_index = utxo.index;
+        let input_assets = &Self::build_asset_vector(utxo);
+
+        let mut tx_builder = whisky::TxBuilder::new_core();
+        tx_builder
+            .set_evaluator(Box::new(OfflineTxEvaluator::new()))
+            .tx_in(
+                &input_tx_hash,
+                input_index.into(),
+                &input_assets,
+                &payment_addr,
+            )
+            .change_address(&recipient_address)
+            .complete_sync(None)
+            .unwrap();
+
+        let signed_tx = wallet.sign_tx(&tx_builder.tx_hex());
+        let tx_bytes = hex::decode(signed_tx.unwrap()).expect("Failed to decode hex string");
+        let response = self
+            .ogmios_clients
+            .submit_transaction(&tx_bytes)
+            .await
+            .unwrap();
+        println!("Transaction submitted, response: {:?}", response);
+        response.transaction.id
+    }
+
     pub async fn is_utxo_unspent_for_3_blocks(&self, address: &str, tx_id: &str) -> bool {
         // Get the current block number (slot) as the starting point
         const SLOTS_NUMBER: u64 = 3;
-        const LIMIT: i32 = 5;
+        const LIMIT: i32 = 50;
         let start_slot = self.ogmios_clients.get_tip().await.unwrap().slot;
         println!(
             "Current slot is {}. Waiting for {} more slots (limit {} checks)...",
@@ -728,7 +790,6 @@ impl CardanoClient {
 
         let mut tx_builder = TxBuilder::new_core();
         tx_builder
-            .network(network.clone())
             .set_evaluator(Box::new(OfflineTxEvaluator::new()))
             // Add regular input for fees
             .tx_in(

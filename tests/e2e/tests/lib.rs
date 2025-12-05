@@ -1086,3 +1086,553 @@ async fn create_hundred_registrations() {
         registration.unwrap()
     );
 }
+
+#[tokio::test]
+async fn deregister_with_valid_cnight_utxo() {
+    let settings = Settings::default();
+    let cardano_client = CardanoClient::new(settings.ogmios_client, settings.constants).await;
+    let midnight_client = MidnightClient::new(settings.node_client).await;
+
+    let address_bech32 = cardano_client.address_as_bech32();
+    println!("New Cardano wallet created: {:?}", address_bech32);
+
+    let dust_hex = MidnightClient::new_dust_hex();
+    let dust_bytes: Vec<u8> = hex::decode(&dust_hex).unwrap().try_into().unwrap();
+    println!(
+        "Registering Cardano wallet {} with DUST address {}",
+        address_bech32, dust_hex
+    );
+
+    let collateral_utxo = cardano_client
+        .make_collateral()
+        .await
+        .expect("Failed to make collateral");
+    let assets = vec![Asset::new_from_str("lovelace", "10000000")];
+    let tx_in = cardano_client
+        .fund_wallet(assets)
+        .await
+        .expect("Failed to fund a wallet");
+
+    let register_tx_id = cardano_client
+        .register(&dust_hex, &tx_in, &collateral_utxo)
+        .await
+        .expect("Failed to register")
+        .transaction
+        .id;
+    println!(
+        "Registration transaction submitted with hash: {}",
+        hex::encode(register_tx_id)
+    );
+
+    let validator_address = cardano_client.constants.policies.auth_token_address();
+    let register_tx = cardano_client
+        .find_utxo_by_tx_id(&validator_address, hex::encode(register_tx_id))
+        .await
+        .expect("No registration UTXO found after registering");
+    println!("Found registration UTXO: {:?}", register_tx);
+
+    let amount = 100;
+    let tx_id = cardano_client
+        .mint_tokens(amount)
+        .await
+        .expect("Failed to mint tokens")
+        .transaction
+        .id;
+    println!("Minted {} cNIGHT. Tx: {}", amount, hex::encode(tx_id));
+
+    // FIXME: it returns first utxo, find by native token or return all utxos
+    let cnight_utxo = match cardano_client
+        .find_utxo_by_tx_id(&cardano_client.address_as_bech32(), hex::encode(tx_id))
+        .await
+    {
+        Some(cnight_utxo) => cnight_utxo,
+        None => panic!("No cNIGHT UTXO found after minting"),
+    };
+
+    let prefix = b"asset_create";
+    let nonce =
+        MidnightClient::calculate_nonce(prefix, cnight_utxo.transaction.id, cnight_utxo.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce);
+
+    let utxos = cardano_client
+        .ogmios_clients
+        .query_utxos(from_ref(&address_bech32))
+        .await
+        .unwrap();
+    assert!(!utxos.is_empty(), "No UTXOs found for funding address");
+    let utxo = utxos
+        .iter()
+        .max_by_key(|u| u.value.lovelace)
+        .expect("No UTXO with lovelace found");
+
+    let deregister_tx = cardano_client
+        .deregister(utxo, &register_tx, &collateral_utxo)
+        .await
+        .expect("Failed to deregister")
+        .transaction
+        .id;
+    println!(
+        "Deregistration transaction submitted with hash: {}",
+        hex::encode(deregister_tx)
+    );
+
+    let reward_address = cardano_client.reward_address_bytes();
+    let dust_address: Vec<u8> = hex::decode(&dust_hex)
+        .expect("Failed to decode DUST hex")
+        .try_into()
+        .unwrap();
+    let events = midnight_client
+        .subscribe_to_cnight_observation_events(&deregister_tx)
+        .await
+        .expect("Failed to listen to cNgD registration event");
+
+    let deregistration = events
+        .iter()
+        .filter_map(|e| e.ok())
+        .filter_map(|evt| evt.as_event::<Deregistration>().ok().flatten())
+        .find(|reg| {
+            reg.0.cardano_reward_address.0 == reward_address
+                && reg.0.dust_public_key.0.0 == dust_address
+        });
+    assert!(
+        deregistration.is_some(),
+        "Did not find deregistration event with expected reward_address and dust_address"
+    );
+    println!(
+        "Matching Deregistration event found: {:?}",
+        deregistration.unwrap()
+    );
+
+    let mapping_removed = events
+        .iter()
+        .filter_map(|e| e.ok())
+        .filter_map(|evt| {
+            evt.as_event::<c_night_observation::events::MappingRemoved>()
+                .ok()
+                .flatten()
+        })
+        .find(|map| {
+            map.0.cardano_reward_address.0 == reward_address
+                && map.0.dust_public_key.0.0 == dust_bytes
+                && map.0.utxo_tx_hash.0 == register_tx_id
+        });
+    assert!(
+        mapping_removed.is_some(),
+        "Did not find MappingRemoved event with expected reward_address, dust_address, and utxo_id"
+    );
+    println!(
+        "Matching MappingRemoved event found: {:?}",
+        mapping_removed.unwrap()
+    );
+}
+
+#[tokio::test]
+async fn register_twice_with_same_cardano_address() {
+    let settings = Settings::default();
+    let cardano_client = CardanoClient::new(settings.ogmios_client, settings.constants).await;
+    let midnight_client = MidnightClient::new(settings.node_client).await;
+
+    let bech32_address = cardano_client.address_as_bech32();
+    println!("New Cardano wallet created: {:?}", bech32_address);
+
+    let dust_hex = MidnightClient::new_dust_hex();
+    println!(
+        "Registering Cardano wallet {} with DUST address {}",
+        bech32_address, dust_hex
+    );
+
+    let collateral_utxo = cardano_client
+        .make_collateral()
+        .await
+        .expect("Failed to make collateral");
+    let assets = vec![Asset::new_from_str("lovelace", "10000000")];
+    let tx_in = cardano_client
+        .fund_wallet(assets)
+        .await
+        .expect("Failed to fund a wallet");
+
+    let register_tx_id = cardano_client
+        .register(&dust_hex, &tx_in, &collateral_utxo)
+        .await
+        .expect("Failed to register tx")
+        .transaction
+        .id;
+    println!(
+        "Registration transaction submitted with hash: {}",
+        hex::encode(register_tx_id)
+    );
+
+    let amount = 100;
+    let tx_id = cardano_client
+        .mint_tokens(amount)
+        .await
+        .expect("Failed to mint tokens")
+        .transaction
+        .id;
+    println!("Minted {} cNIGHT. Tx: {}", amount, hex::encode(tx_id));
+
+    // FIXME: it returns first utxo, find by native token or return all utxos
+    let cnight_utxo = match cardano_client
+        .find_utxo_by_tx_id(&cardano_client.address_as_bech32(), hex::encode(tx_id))
+        .await
+    {
+        Some(cnight_utxo) => cnight_utxo,
+        None => panic!("No cNIGHT UTXO found after minting"),
+    };
+
+    let prefix = b"asset_create";
+    let nonce =
+        MidnightClient::calculate_nonce(prefix, cnight_utxo.transaction.id, cnight_utxo.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce);
+
+    // register second time
+    let assets2 = vec![Asset::new_from_str("lovelace", "10000000")];
+    let tx_in2 = cardano_client
+        .fund_wallet(assets2)
+        .await
+        .expect("Failed to fund a wallet");
+
+    let dust_hex2 = MidnightClient::new_dust_hex();
+    let register_tx_id2 = cardano_client
+        .register(&dust_hex2, &tx_in2, &collateral_utxo)
+        .await
+        .expect("Failed to register tx")
+        .transaction
+        .id;
+    println!(
+        "Registration transaction submitted with hash: {}",
+        hex::encode(register_tx_id2)
+    );
+
+    let amount2 = 100;
+    let tx_id2 = cardano_client
+        .mint_tokens(amount2)
+        .await
+        .expect("Failed to mint tokens")
+        .transaction
+        .id;
+    println!("Minted {} cNIGHT. Tx: {}", amount2, hex::encode(tx_id2));
+
+    // FIXME: it returns first utxo, find by native token or return all utxos
+    let cnight_utxo2 = match cardano_client
+        .find_utxo_by_tx_id(&cardano_client.address_as_bech32(), hex::encode(tx_id2))
+        .await
+    {
+        Some(cnight_utxo2) => cnight_utxo2,
+        None => panic!("No cNIGHT UTXO found after minting"),
+    };
+
+    let prefix2 = b"asset_create";
+    let nonce2 =
+        MidnightClient::calculate_nonce(prefix2, cnight_utxo2.transaction.id, cnight_utxo2.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce2);
+}
+
+#[tokio::test]
+async fn deregister_first_mapping() {
+    let settings = Settings::default();
+    let cardano_client = CardanoClient::new(settings.ogmios_client, settings.constants).await;
+    let midnight_client = MidnightClient::new(settings.node_client).await;
+
+    let bech32_address = cardano_client.address_as_bech32();
+    println!("New Cardano wallet created: {:?}", bech32_address);
+
+    let dust_hex = MidnightClient::new_dust_hex();
+    println!(
+        "Registering Cardano wallet {} with DUST address {}",
+        bech32_address, dust_hex
+    );
+
+    let collateral_utxo = cardano_client
+        .make_collateral()
+        .await
+        .expect("Failed to make collateral");
+    let assets = vec![Asset::new_from_str("lovelace", "10000000")];
+    let tx_in = cardano_client
+        .fund_wallet(assets)
+        .await
+        .expect("Failed to fund a wallet");
+
+    let register_tx_id = cardano_client
+        .register(&dust_hex, &tx_in, &collateral_utxo)
+        .await
+        .expect("Failed to register tx")
+        .transaction
+        .id;
+    println!(
+        "Registration transaction submitted with hash: {}",
+        hex::encode(register_tx_id)
+    );
+    let validator_address = cardano_client.constants.policies.auth_token_address();
+    println!(
+        "Looking for registration UTXO at address: {}",
+        validator_address
+    );
+    let register_tx = cardano_client
+        .find_utxo_by_tx_id(&validator_address, hex::encode(register_tx_id))
+        .await
+        .expect("No registration UTXO found after registering");
+    println!("Found registration UTXO: {:?}", register_tx);
+
+    let amount = 100;
+    let tx_id = cardano_client
+        .mint_tokens(amount)
+        .await
+        .expect("Failed to mint tokens")
+        .transaction
+        .id;
+    println!("Minted {} cNIGHT. Tx: {}", amount, hex::encode(tx_id));
+
+    // FIXME: it returns first utxo, find by native token or return all utxos
+    let cnight_utxo = match cardano_client
+        .find_utxo_by_tx_id(&cardano_client.address_as_bech32(), hex::encode(tx_id))
+        .await
+    {
+        Some(cnight_utxo) => cnight_utxo,
+        None => panic!("No cNIGHT UTXO found after minting"),
+    };
+
+    let prefix = b"asset_create";
+    let nonce =
+        MidnightClient::calculate_nonce(prefix, cnight_utxo.transaction.id, cnight_utxo.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce);
+
+    // register second time
+    let assets2 = vec![Asset::new_from_str("lovelace", "10000000")];
+    let tx_in2 = cardano_client
+        .fund_wallet(assets2)
+        .await
+        .expect("Failed to fund a wallet");
+
+    let dust_hex2 = MidnightClient::new_dust_hex();
+    let register_tx_id2 = cardano_client
+        .register(&dust_hex2, &tx_in2, &collateral_utxo)
+        .await
+        .expect("Failed to register tx")
+        .transaction
+        .id;
+    println!(
+        "Registration transaction submitted with hash: {}",
+        hex::encode(register_tx_id2)
+    );
+
+    let amount2 = 100;
+    let tx_id2 = cardano_client
+        .mint_tokens(amount2)
+        .await
+        .expect("Failed to mint tokens")
+        .transaction
+        .id;
+    println!("Minted {} cNIGHT. Tx: {}", amount2, hex::encode(tx_id2));
+
+    // FIXME: it returns first utxo, find by native token or return all utxos
+    let cnight_utxo2 = match cardano_client
+        .find_utxo_by_tx_id(&cardano_client.address_as_bech32(), hex::encode(tx_id2))
+        .await
+    {
+        Some(cnight_utxo2) => cnight_utxo2,
+        None => panic!("No cNIGHT UTXO found after minting"),
+    };
+
+    let prefix2 = b"asset_create";
+    let nonce2 =
+        MidnightClient::calculate_nonce(prefix2, cnight_utxo2.transaction.id, cnight_utxo2.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce2);
+
+    // deregister first mapping
+    let utxos = cardano_client
+        .ogmios_clients
+        .query_utxos(from_ref(&bech32_address))
+        .await
+        .unwrap();
+    assert!(!utxos.is_empty(), "No UTXOs found for funding address");
+    let utxo = utxos
+        .iter()
+        .max_by_key(|u| u.value.lovelace)
+        .expect("No UTXO with lovelace found");
+    let deregister_tx = cardano_client
+        .deregister(utxo, &register_tx, &collateral_utxo)
+        .await
+        .expect("Failed to deregister")
+        .transaction
+        .id;
+    println!(
+        "Deregistration transaction submitted with hash: {}",
+        hex::encode(deregister_tx)
+    );
+
+    let amount3 = 100;
+    let tx_id3 = cardano_client
+        .mint_tokens(amount3)
+        .await
+        .expect("Failed to mint tokens")
+        .transaction
+        .id;
+    println!("Minted {} cNIGHT. Tx: {}", amount3, hex::encode(tx_id3));
+
+    // FIXME: it returns first utxo, find by native token or return all utxos
+    let cnight_utxo3 = match cardano_client
+        .find_utxo_by_tx_id(&cardano_client.address_as_bech32(), hex::encode(tx_id3))
+        .await
+    {
+        Some(cnight_utxo3) => cnight_utxo3,
+        None => panic!("No cNIGHT UTXO found after minting"),
+    };
+
+    let prefix3 = b"asset_create";
+    let nonce3 =
+        MidnightClient::calculate_nonce(prefix3, cnight_utxo3.transaction.id, cnight_utxo3.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce3);
+}
+
+#[tokio::test]
+async fn produce_dust_from_tokens_owned_before_registration() {
+    let settings = Settings::default();
+    let cardano_client = CardanoClient::new(settings.ogmios_client, settings.constants).await;
+    let midnight_client = MidnightClient::new(settings.node_client).await;
+    let address_bech32 = cardano_client.address_as_bech32();
+    println!("New Cardano wallet created: {:?}", address_bech32);
+
+    let dust_hex = MidnightClient::new_dust_hex();
+    let dust_bytes: Vec<u8> = hex::decode(&dust_hex).unwrap().try_into().unwrap();
+    println!(
+        "Registering Cardano wallet {} with DUST address {}",
+        address_bech32, dust_hex
+    );
+
+    let amount = 100;
+    let tx_id = cardano_client
+        .mint_tokens(amount)
+        .await
+        .expect("Failed to mint tokens")
+        .transaction
+        .id;
+    println!("Minted {} cNIGHT. Tx: {}", amount, hex::encode(tx_id));
+
+    let cnight_utxo = match cardano_client
+        .find_utxo_by_tx_id(&cardano_client.address_as_bech32(), hex::encode(tx_id))
+        .await
+    {
+        Some(cnight_utxo) => cnight_utxo,
+        None => panic!("No cNIGHT UTXO found after minting"),
+    };
+
+    let prefix = b"asset_create";
+    let nonce =
+        MidnightClient::calculate_nonce(prefix, cnight_utxo.transaction.id, cnight_utxo.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce);
+
+    let collateral_utxo = cardano_client
+        .make_collateral()
+        .await
+        .expect("Failed to make collateral");
+    let assets = vec![Asset::new_from_str("lovelace", "10000000")];
+    let tx_in = cardano_client
+        .fund_wallet(assets)
+        .await
+        .expect("Failed to fund a wallet");
+
+    let register_tx_id = cardano_client
+        .register(&dust_hex, &tx_in, &collateral_utxo)
+        .await
+        .expect("Failed to register tx")
+        .transaction
+        .id;
+    println!(
+        "Registration transaction submitted with hash: {}",
+        hex::encode(register_tx_id)
+    );
+
+    let cnight_utxo_new = cardano_client
+        .rotate_cnight(&cardano_client.wallet, &cnight_utxo)
+        .await;
+    println!("Rotated cNIGHT UTXO: {}", &hex::encode(&cnight_utxo_new));
+
+    let cnight_new = match cardano_client
+        .find_utxo_by_tx_id(
+            &cardano_client.address_as_bech32(),
+            hex::encode(&cnight_utxo_new),
+        )
+        .await
+    {
+        Some(cnight_new) => cnight_new,
+        None => panic!("No cNIGHT UTXO found after rotation"),
+    };
+
+    let prefix2 = b"asset_create";
+    let nonce_new =
+        MidnightClient::calculate_nonce(prefix2, cnight_new.transaction.id, cnight_new.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce_new);
+}
+
+#[tokio::test]
+async fn spend_cnight_producing_dust() {
+    let settings = Settings::default();
+    let cardano_client =
+        CardanoClient::new(settings.ogmios_client.clone(), settings.constants.clone()).await;
+    let midnight_client = MidnightClient::new(settings.node_client).await;
+
+    let bech32_address = cardano_client.address_as_bech32();
+    println!("New Cardano wallet created: {:?}", bech32_address);
+
+    let bob_client = CardanoClient::new(settings.ogmios_client, settings.constants).await;
+    let bob_bech32 = bob_client.address_as_bech32();
+    println!("Bob's Cardano wallet created: {:?}", bob_bech32);
+
+    let dust_hex = MidnightClient::new_dust_hex();
+    println!(
+        "Registering Cardano wallet {} with DUST address {}",
+        bech32_address, dust_hex
+    );
+
+    let collateral_utxo = cardano_client
+        .make_collateral()
+        .await
+        .expect("Failed to make collateral");
+    let assets = vec![Asset::new_from_str("lovelace", "10000000")];
+    let tx_in = cardano_client
+        .fund_wallet(assets)
+        .await
+        .expect("Failed to fund a wallet");
+
+    let register_tx_id = cardano_client
+        .register(&dust_hex, &tx_in, &collateral_utxo)
+        .await
+        .expect("Failed to register tx")
+        .transaction
+        .id;
+    println!(
+        "Registration transaction submitted with hash: {}",
+        hex::encode(register_tx_id)
+    );
+
+    let amount = 100;
+    let tx_id = cardano_client
+        .mint_tokens(amount)
+        .await
+        .expect("Failed to mint tokens")
+        .transaction
+        .id;
+    println!("Minted {} cNIGHT. Tx: {}", amount, hex::encode(tx_id));
+
+    // FIXME: it returns first utxo, find by native token or return all utxos
+    let cnight_utxo = match cardano_client
+        .find_utxo_by_tx_id(&cardano_client.address_as_bech32(), hex::encode(tx_id))
+        .await
+    {
+        Some(cnight_utxo) => cnight_utxo,
+        None => panic!("No cNIGHT UTXO found after minting"),
+    };
+
+    let prefix = b"asset_create";
+    let nonce =
+        MidnightClient::calculate_nonce(prefix, cnight_utxo.transaction.id, cnight_utxo.index);
+    println!("Calculated nonce for cNIGHT UTXO: {}", nonce);
+
+    // sleep 60s
+    println!("Sleeping 60 seconds before spending cNIGHT...");
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let cnight_spent_utxo = cardano_client
+        .spend_cnight(&cardano_client.wallet, &cnight_utxo, &bob_bech32)
+        .await;
+}
