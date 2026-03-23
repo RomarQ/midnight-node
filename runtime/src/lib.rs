@@ -48,7 +48,10 @@ pub use frame_support::{
 };
 pub use frame_system::Call as SystemCall;
 use frame_system::{EnsureNone, EnsureRoot};
-use midnight_node_ledger::types::{GasCost, Tx, active_version::LedgerApiError};
+use midnight_node_ledger::types::{
+	GasCost, Tx,
+	active_version::{LedgerApiError, StateQuery, StateQueryResult},
+};
 use midnight_primitives::BridgeRecipient;
 use midnight_primitives_beefy::BeefyStakes;
 use midnight_primitives_cnight_observation::CardanoPosition;
@@ -1046,6 +1049,12 @@ impl_runtime_apis! {
 	impl pallet_midnight::MidnightRuntimeApi<Block> for Runtime {
 		fn get_contract_state(contract_address: Vec<u8>) -> Result<Vec<u8>, LedgerApiError> {
 			Midnight::get_contract_state(&contract_address)
+		}
+		fn query_contract_state(
+			contract_address: Vec<u8>,
+			queries: Vec<StateQuery>,
+		) -> Result<Vec<StateQueryResult>, LedgerApiError> {
+			Midnight::query_contract_state(&contract_address, queries)
 		}
 		fn get_decoded_transaction(midnight_transaction: Vec<u8>) -> Result<Tx, LedgerApiError>  {
 			Midnight::get_decoded_transaction(&midnight_transaction)

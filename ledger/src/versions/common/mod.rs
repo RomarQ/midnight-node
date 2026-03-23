@@ -679,6 +679,71 @@ where
 		Self::do_get_contract_state(&api, state_key, contract_address, f)
 	}
 
+	pub fn query_contract_state(
+		state_key: &[u8],
+		contract_address: &[u8],
+		queries: Vec<types::StateQuery>,
+	) -> Result<Vec<types::StateQueryResult>, LedgerApiError> {
+		let api = api::new();
+		let addr = api.deserialize::<ContractAddress>(contract_address)?;
+		let ledger = Self::get_ledger(&api, state_key)?;
+
+		let contract_state = ledger
+			.get_contract_state(addr)
+			.ok_or(LedgerApiError::ContractNotFound)?;
+
+		let root_state = contract_state.data.get_ref();
+
+		let serialize_sv = |sv: &onchain_runtime_local::state::StateValue<D>| -> Result<Vec<u8>, alloc::string::String> {
+			let size = midnight_serialize_local::tagged_serialized_size(sv);
+			let mut buf = Vec::with_capacity(size);
+			midnight_serialize_local::tagged_serialize(sv, &mut buf)
+				.map_err(|e| alloc::format!("serialize: {}", e))?;
+			Ok(buf)
+		};
+
+		Ok(queries.into_iter().map(|query| {
+			use onchain_runtime_local::state::StateValue;
+
+			let ok = |value, found| types::StateQueryResult {
+				field_path: query.field_path.clone(), key: query.key.clone(),
+				found, value, error: None,
+			};
+			let err = |msg: alloc::string::String| types::StateQueryResult {
+				field_path: query.field_path.clone(), key: query.key.clone(),
+				found: false, value: None, error: Some(msg),
+			};
+
+			// Navigate field_path through nested Arrays
+			let mut current = root_state;
+			for &idx in &query.field_path {
+				match current {
+					StateValue::Array(arr) => match arr.get(idx as usize) {
+						Some(child) => current = child,
+						None => return err(alloc::format!("index {} out of bounds", idx)),
+					},
+					_ => return err("expected array".into()),
+				}
+			}
+
+			match (&query.key, current) {
+				(Some(key_bytes), StateValue::Map(map)) => {
+					let mut reader: &[u8] = key_bytes.as_slice();
+					match <base_crypto_local::fab::AlignedValue as midnight_serialize_local::Deserializable>::deserialize(&mut reader, 0) {
+						Ok(key) => match map.get(&key) {
+							Some(sp) => serialize_sv(&*sp).map_or_else(err, |b| ok(Some(b), true)),
+							None => ok(None, false),
+						},
+						Err(e) => err(alloc::format!("bad key: {}", e)),
+					}
+				},
+				(None, StateValue::Map(map)) => ok(Some((map.size() as u64).to_le_bytes().to_vec()), true),
+				(Some(_), _) => err("key provided but field is not a map".into()),
+				(None, val) => serialize_sv(val).map_or_else(err, |b| ok(Some(b), true)),
+			}
+		}).collect())
+	}
+
 	pub fn get_zswap_chain_state(
 		state_key: &[u8],
 		contract_address: &[u8],

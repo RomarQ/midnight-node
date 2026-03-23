@@ -4,7 +4,10 @@ use crate::{
 	common::types::{
 		GasCost, Hash, SystemTransactionAppliedStateRoot, TransactionAppliedStateRoot, Tx,
 	},
-	ledger_8::{BlockContext, types::LedgerApiError},
+	ledger_8::{
+		BlockContext,
+		types::{LedgerApiError, StateQuery, StateQueryResult},
+	},
 };
 use alloc::vec::Vec;
 use sp_runtime_interface::pass_by::{
@@ -129,6 +132,18 @@ pub trait Ledger8Bridge {
 		contract_address: PassFatPointerAndRead<&[u8]>,
 	) -> AllocateAndReturnByCodec<Result<Vec<u8>, LedgerApiError>> {
 		Bridge::<Signature, Database>::get_contract_state(state_key, contract_address)
+	}
+
+	/*
+	 * query_contract_state()
+	 */
+	fn query_contract_state(
+		&mut self,
+		state_key: PassFatPointerAndRead<&[u8]>,
+		contract_address: PassFatPointerAndRead<&[u8]>,
+		queries: PassFatPointerAndDecode<Vec<StateQuery>>,
+	) -> AllocateAndReturnByCodec<Result<Vec<StateQueryResult>, LedgerApiError>> {
+		Bridge::<Signature, Database>::query_contract_state(state_key, contract_address, queries)
 	}
 
 	/*

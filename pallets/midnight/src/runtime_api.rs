@@ -14,15 +14,22 @@
 //! Runtime API definition for Midnight pallet
 
 use alloc::vec::Vec;
-use midnight_node_ledger::types::{GasCost, Tx, active_version::LedgerApiError};
+use midnight_node_ledger::types::{
+	GasCost, Tx,
+	active_version::{LedgerApiError, StateQuery, StateQueryResult},
+};
 use scale_info::prelude::string::String;
 
 sp_api::decl_runtime_apis! {
-	#[api_version(5)]
+	#[api_version(6)]
 	pub trait MidnightRuntimeApi {
 		#[changed_in(2)]
 		fn get_contract_state(contract_address: Vec<u8>) -> Vec<u8>;
 		fn get_contract_state(contract_address: Vec<u8>) -> Result<Vec<u8>, LedgerApiError>;
+		fn query_contract_state(
+			contract_address: Vec<u8>,
+			queries: Vec<StateQuery>,
+		) -> Result<Vec<StateQueryResult>, LedgerApiError>;
 		#[changed_in(2)]
 		fn get_decoded_transaction(transaction_bytes: Vec<u8>) -> Option<Tx>;
 		fn get_decoded_transaction(transaction_bytes: Vec<u8>) -> Result<Tx, LedgerApiError>;

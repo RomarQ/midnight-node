@@ -24,6 +24,7 @@ pub use pallet::*;
 mod runtime_api;
 pub use runtime_api::*;
 
+pub use midnight_node_ledger::types::active_version::{StateQuery, StateQueryResult};
 pub use midnight_primitives::{
 	LedgerMutFn, LedgerStateProviderMut, TransactionType, TransactionTypeV2,
 };
@@ -49,10 +50,11 @@ pub mod pallet {
 	use sidechain_domain::byte_string::BoundedString;
 
 	use midnight_node_ledger::types::{
-		self as LedgerTypes, GasCost, Tx as LedgerTx, UtxoInfo, active_ledger_bridge as LedgerApi,
+		self as LedgerTypes, GasCost, Tx as LedgerTx, UtxoInfo,
+		active_ledger_bridge as LedgerApi,
 		active_version::{
-			BlockContext, DeserializationError, LedgerApiError, SerializationError,
-			TransactionError,
+			BlockContext, DeserializationError, LedgerApiError, SerializationError, StateQuery,
+			StateQueryResult, TransactionError,
 		},
 	};
 	use sp_runtime::Weight;
@@ -283,6 +285,8 @@ pub mod pallet {
 		NetworkIdNotString,
 		#[codec(index = 12)]
 		GetTransactionContextError,
+		#[codec(index = 13)]
+		ContractNotFound,
 	}
 	// grcov-excl-stop
 
@@ -304,6 +308,7 @@ pub mod pallet {
 				LedgerApiError::GetTransactionContextError => {
 					Error::<T>::GetTransactionContextError
 				},
+				LedgerApiError::ContractNotFound => Error::<T>::ContractNotFound,
 			}
 		}
 	}
@@ -490,6 +495,14 @@ pub mod pallet {
 		pub fn get_contract_state(contract_address: &[u8]) -> Result<Vec<u8>, LedgerApiError> {
 			let state_key = StateKey::<T>::get();
 			LedgerApi::get_contract_state(&state_key, contract_address)
+		}
+
+		pub fn query_contract_state(
+			contract_address: &[u8],
+			queries: Vec<StateQuery>,
+		) -> Result<Vec<StateQueryResult>, LedgerApiError> {
+			let state_key = StateKey::<T>::get();
+			LedgerApi::query_contract_state(&state_key, contract_address, queries)
 		}
 
 		pub fn get_decoded_transaction(

@@ -21,7 +21,7 @@ use jsonrpsee::{
 	types::error::{ErrorObject, ErrorObjectOwned, INVALID_PARAMS_CODE},
 };
 
-use pallet_midnight::MidnightRuntimeApi;
+use pallet_midnight::{MidnightRuntimeApi, StateQuery};
 use sc_client_api::{BlockBackend, BlockchainEvents};
 use sp_api::{ApiExt, ProvideRuntimeApi};
 use sp_blockchain::HeaderBackend;
@@ -29,6 +29,7 @@ use sp_runtime::traits::Block as BlockT;
 use std::sync::Arc;
 
 pub const API_VERSIONS: [u32; 1] = [2];
+pub const MAX_STATE_QUERIES: usize = 100;
 
 /// Midnight core RPC API.
 ///
@@ -72,6 +73,21 @@ pub trait MidnightApi<BlockHash> {
 	/// If `at` is `None`, the best block is used.
 	#[method(name = "midnight_ledgerVersion")]
 	fn get_ledger_version(&self, at: Option<BlockHash>) -> Result<String, BlockRpcError>;
+
+	/// Queries specific fields from a deployed contract's state tree by path,
+	/// enabling clients to fetch contract state incrementally without loading it in full.
+	///
+	/// Each query navigates the state tree using a field path (array indices) and an
+	/// optional key for keyed lookups. The contract address, query keys, and result
+	/// values are all hex-encoded.
+	/// Queries run against the best block unless `at` specifies a historical block hash.
+	#[method(name = "midnight_queryContractState")]
+	fn query_contract_state(
+		&self,
+		contract_address: String,
+		queries: Vec<RpcStateQuery>,
+		at: Option<BlockHash>,
+	) -> Result<Vec<RpcStateQueryResult>, StateRpcError>;
 }
 
 #[derive(Debug)]
@@ -82,6 +98,10 @@ pub enum StateRpcError {
 	UnableToGetZSwapChainState,
 	UnableToGetZSwapStateRoot,
 	UnableToGetLedgerStateRoot,
+	UnableToQueryContractState,
+	TooManyQueries { max: usize, got: usize },
+	BadQueryKey(String),
+	QueryContractStateNotSupported,
 }
 
 #[derive(Debug)]
@@ -147,6 +167,18 @@ impl Display for StateRpcError {
 			StateRpcError::UnableToGetLedgerStateRoot => {
 				write!(f, "Unable to get requested ledger state root")
 			},
+			StateRpcError::UnableToQueryContractState => {
+				write!(f, "Unable to query contract state")
+			},
+			StateRpcError::TooManyQueries { max, got } => {
+				write!(f, "Too many queries: got {got}, maximum is {max}")
+			},
+			StateRpcError::BadQueryKey(key) => {
+				write!(f, "Unable to hex decode query key: {key}")
+			},
+			StateRpcError::QueryContractStateNotSupported => {
+				write!(f, "query_contract_state is not supported by the runtime at this block")
+			},
 		}
 	}
 }
@@ -193,6 +225,25 @@ impl From<StateRpcError> for ErrorObjectOwned {
 	fn from(value: StateRpcError) -> Self {
 		ErrorObject::owned(INVALID_PARAMS_CODE, value.to_string(), None::<()>)
 	}
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpcStateQuery {
+	pub field_path: Vec<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpcStateQueryResult {
+	pub field_path: Vec<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub key: Option<String>,
+	pub found: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub value: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub error: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize, JsonSchema)]
@@ -360,5 +411,60 @@ where
 			.map_err(|_e| BlockRpcError::BlockNotFound)?;
 
 		Ok(String::from_utf8_lossy(&ledger_version).to_string())
+	}
+
+	fn query_contract_state(
+		&self,
+		contract_address: String,
+		queries: Vec<RpcStateQuery>,
+		at: Option<<Block as BlockT>::Hash>,
+	) -> Result<Vec<RpcStateQueryResult>, StateRpcError> {
+		if queries.len() > MAX_STATE_QUERIES {
+			return Err(StateRpcError::TooManyQueries {
+				max: MAX_STATE_QUERIES,
+				got: queries.len(),
+			});
+		}
+		let dehexed_address = hex::decode(&contract_address)
+			.map_err(|_| StateRpcError::BadContractAddress(contract_address))?;
+
+		// Convert RPC types to ledger types
+		let ledger_queries: Vec<StateQuery> = queries
+			.iter()
+			.map(|q| {
+				let key = q
+					.key
+					.as_ref()
+					.map(|k| hex::decode(k).map_err(|_| StateRpcError::BadQueryKey(k.clone())))
+					.transpose()?;
+				Ok(StateQuery { field_path: q.field_path.clone(), key })
+			})
+			.collect::<Result<Vec<_>, StateRpcError>>()?;
+
+		let api = self.client.runtime_api();
+		let at = at.unwrap_or_else(|| self.client.info().best_hash);
+
+		let api_version = get_api_version::<C, Block>(&api, at)
+			.map_err(|_| StateRpcError::UnableToQueryContractState)?;
+		if api_version < 6 {
+			return Err(StateRpcError::QueryContractStateNotSupported);
+		}
+
+		let results = api
+			.query_contract_state(at, dehexed_address, ledger_queries)
+			.map_err(|_| StateRpcError::UnableToQueryContractState)?
+			.map_err(|_| StateRpcError::UnableToQueryContractState)?;
+
+		// Convert ledger results to RPC types (hex-encode binary values)
+		Ok(results
+			.into_iter()
+			.map(|r| RpcStateQueryResult {
+				field_path: r.field_path,
+				key: r.key.map(hex::encode),
+				found: r.found,
+				value: r.value.map(hex::encode),
+				error: r.error,
+			})
+			.collect())
 	}
 }

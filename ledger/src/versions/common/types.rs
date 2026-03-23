@@ -187,8 +187,6 @@ pub enum LedgerApiError {
 	HostApiError,
 	GetTransactionContextError,
 	ContractNotFound,
-	TooManyQueries,
-	QueryError,
 }
 
 impl core::fmt::Display for LedgerApiError {
@@ -278,8 +276,6 @@ impl core::fmt::Display for LedgerApiError {
 				write!(f, "Error while getting transaction context")
 			},
 			LedgerApiError::ContractNotFound => write!(f, "Contract not found"),
-			LedgerApiError::TooManyQueries => write!(f, "Too many queries (max 100)"),
-			LedgerApiError::QueryError => write!(f, "Query error"),
 		}
 	}
 }
@@ -422,8 +418,6 @@ impl From<LedgerApiError> for u8 {
 			LedgerApiError::FeeCalculationError => 155,
 			LedgerApiError::GetTransactionContextError => 165,
 			LedgerApiError::ContractNotFound => 156,
-			LedgerApiError::TooManyQueries => 157,
-			LedgerApiError::QueryError => 158,
 			// Error in the Host API, not coming from Ledger
 			LedgerApiError::HostApiError => 255,
 		}
@@ -438,7 +432,7 @@ impl std::error::Error for LedgerApiError {}
 #[derive(Clone, RuntimeDebug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 pub struct StateQuery {
 	/// Path of indices through nested StateValue::Arrays.
-	pub field_path: Vec<u32>,
+	pub field_path: Vec<u8>,
 	/// Optional key bytes — interpretation depends on field type.
 	pub key: Option<Vec<u8>>,
 }
@@ -447,15 +441,13 @@ pub struct StateQuery {
 #[derive(Clone, RuntimeDebug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 pub struct StateQueryResult {
 	/// Echo back the query path.
-	pub field_path: Vec<u32>,
+	pub field_path: Vec<u8>,
 	/// Echo back the query key.
 	pub key: Option<Vec<u8>>,
 	/// Whether the requested value exists.
 	pub found: bool,
-	/// Serialized value bytes (None if not found).
+	/// Serialized value bytes (None if not found or error).
 	pub value: Option<Vec<u8>>,
-	/// The StateValue variant: "cell", "map", "merkle_tree", "array", "null".
-	pub field_type: Option<String>,
 	/// Per-query error message (None if no error).
 	pub error: Option<String>,
 }
