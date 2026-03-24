@@ -705,18 +705,16 @@ where
 		Ok(queries.into_iter().map(|query| {
 			use onchain_runtime_local::state::StateValue;
 
-			let ok = |value, found| types::StateQueryResult {
-				field_path: query.field_path.clone(), key: query.key.clone(),
-				found, value, error: None,
+			let ok = |value| types::StateQueryResult {
+				query: query.clone(), value, error: None,
 			};
 			let err = |msg: alloc::string::String| types::StateQueryResult {
-				field_path: query.field_path.clone(), key: query.key.clone(),
-				found: false, value: None, error: Some(msg),
+				query: query.clone(), value: None, error: Some(msg),
 			};
 
-			// Navigate field_path through nested Arrays
+			// Navigate path through nested Arrays
 			let mut current = root_state;
-			for &idx in &query.field_path {
+			for &idx in &query.path {
 				match current {
 					StateValue::Array(arr) => match arr.get(idx as usize) {
 						Some(child) => current = child,
@@ -731,15 +729,15 @@ where
 					let mut reader: &[u8] = key_bytes.as_slice();
 					match <base_crypto_local::fab::AlignedValue as midnight_serialize_local::Deserializable>::deserialize(&mut reader, 0) {
 						Ok(key) => match map.get(&key) {
-							Some(sp) => serialize_sv(&*sp).map_or_else(err, |b| ok(Some(b), true)),
-							None => ok(None, false),
+							Some(sp) => serialize_sv(&*sp).map_or_else(err, |b| ok(Some(b))),
+							None => ok(None),
 						},
 						Err(e) => err(alloc::format!("bad key: {}", e)),
 					}
 				},
-				(None, StateValue::Map(map)) => ok(Some((map.size() as u64).to_le_bytes().to_vec()), true),
+				(None, StateValue::Map(_)) => err("key required for map fields".into()),
 				(Some(_), _) => err("key provided but field is not a map".into()),
-				(None, val) => serialize_sv(val).map_or_else(err, |b| ok(Some(b), true)),
+				(None, val) => serialize_sv(val).map_or_else(err, |b| ok(Some(b))),
 			}
 		}).collect())
 	}

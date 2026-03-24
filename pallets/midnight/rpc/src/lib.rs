@@ -229,17 +229,14 @@ impl From<StateRpcError> for ErrorObjectOwned {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcStateQuery {
-	pub field_path: Vec<u8>,
+	pub path: Vec<u32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcStateQueryResult {
-	pub field_path: Vec<u8>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub key: Option<String>,
-	pub found: bool,
+	pub query: RpcStateQuery,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub value: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -437,7 +434,7 @@ where
 					.as_ref()
 					.map(|k| hex::decode(k).map_err(|_| StateRpcError::BadQueryKey(k.clone())))
 					.transpose()?;
-				Ok(StateQuery { field_path: q.field_path.clone(), key })
+				Ok(StateQuery { path: q.path.clone(), key })
 			})
 			.collect::<Result<Vec<_>, StateRpcError>>()?;
 
@@ -459,9 +456,10 @@ where
 		Ok(results
 			.into_iter()
 			.map(|r| RpcStateQueryResult {
-				field_path: r.field_path,
-				key: r.key.map(hex::encode),
-				found: r.found,
+				query: RpcStateQuery {
+					path: r.query.path,
+					key: r.query.key.map(hex::encode),
+				},
 				value: r.value.map(hex::encode),
 				error: r.error,
 			})

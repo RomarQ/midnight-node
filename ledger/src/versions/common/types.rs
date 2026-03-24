@@ -432,23 +432,19 @@ impl std::error::Error for LedgerApiError {}
 #[derive(Clone, RuntimeDebug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 pub struct StateQuery {
 	/// Path of indices through nested StateValue::Arrays.
-	pub field_path: Vec<u8>,
-	/// Optional key bytes — interpretation depends on field type.
+	pub path: Vec<u32>,
+	/// Optional key bytes for collection lookups.
 	pub key: Option<Vec<u8>>,
 }
 
 /// Result of a single state query.
 #[derive(Clone, RuntimeDebug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 pub struct StateQueryResult {
-	/// Echo back the query path.
-	pub field_path: Vec<u8>,
-	/// Echo back the query key.
-	pub key: Option<Vec<u8>>,
-	/// Whether the requested value exists.
-	pub found: bool,
-	/// Serialized value bytes (None if not found or error).
+	/// The original query.
+	pub query: StateQuery,
+	/// Serialized value bytes (tagged format). None if not found.
 	pub value: Option<Vec<u8>>,
-	/// Per-query error message (None if no error).
+	/// Per-query error message. None if successful.
 	pub error: Option<String>,
 }
 
