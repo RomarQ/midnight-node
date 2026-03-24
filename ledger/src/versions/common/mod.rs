@@ -688,23 +688,19 @@ where
 		let addr = api.deserialize::<ContractAddress>(contract_address)?;
 		let ledger = Self::get_ledger(&api, state_key)?;
 
-		let contract_state = ledger
-			.get_contract_state(addr)
-			.ok_or(LedgerApiError::ContractNotFound)?;
-
-		let root_state = contract_state.data.get_ref();
-
-		let serialize_sv = |sv: &onchain_runtime_local::state::StateValue<D>| -> Result<Vec<u8>, alloc::string::String> {
-			let size = midnight_serialize_local::tagged_serialized_size(sv);
-			let mut buf = Vec::with_capacity(size);
-			midnight_serialize_local::tagged_serialize(sv, &mut buf)
-				.map_err(|e| alloc::format!("serialize: {}", e))?;
-			Ok(buf)
+		// TODO: Return a proper error once PR #916 (ContractNotPresent) merges.
+		// https://github.com/midnightntwrk/midnight-node/pull/916
+		let contract_state = match ledger.get_contract_state(addr) {
+			Some(cs) => cs,
+			None => return Ok(Vec::new()),
 		};
 
-		Ok(queries.into_iter().map(|query| {
-			use onchain_runtime_local::state::StateValue;
+		use base_crypto_local::fab::{AlignedValue, Value};
+		use onchain_runtime_local::state::StateValue;
 
+		let root = contract_state.data.get_ref().clone();
+
+		Ok(queries.into_iter().map(|query| {
 			let ok = |value| types::StateQueryResult {
 				query: query.clone(), value, error: None,
 			};
@@ -712,32 +708,60 @@ where
 				query: query.clone(), value: None, error: Some(msg),
 			};
 
-			// Navigate path through nested Arrays
-			let mut current = root_state;
-			for &idx in &query.path {
-				match current {
-					StateValue::Array(arr) => match arr.get(idx as usize) {
-						Some(child) => current = child,
-						None => return err(alloc::format!("index {} out of bounds", idx)),
+			// Deserialize each path step as AlignedValue and navigate.
+			// Mirrors the VM's idx instruction: key interpretation depends on the variant.
+			let mut current = root.clone();
+			for key_bytes in &query.path {
+				let key: AlignedValue = match midnight_serialize_local::Deserializable::deserialize(
+					&mut key_bytes.as_slice(), 0,
+				) {
+					Ok(k) => k,
+					Err(e) => return err(alloc::format!("bad key: {e}")),
+				};
+				current = match &current {
+					StateValue::Array(arr) => {
+						let i: u8 = match (&**AsRef::<Value>::as_ref(&key)).try_into() {
+							Ok(i) => i,
+							Err(e) => return err(alloc::format!("{e}")),
+						};
+						match arr.get(i as usize).cloned() {
+							Some(v) => v,
+							None => return err(alloc::format!("index {i} out of bounds")),
+						}
+					}
+					StateValue::Map(map) => match map.get(&key) {
+						Some(sp) => (*sp).clone(),
+						None => return ok(None),
 					},
-					_ => return err("expected array".into()),
-				}
+					StateValue::BoundedMerkleTree(tree) => {
+						let pos: u64 = match (&**AsRef::<Value>::as_ref(&key)).try_into() {
+							Ok(p) => p,
+							Err(e) => return err(alloc::format!("{e}")),
+						};
+						if pos >= (1u64 << tree.height() as u64) {
+							return err(alloc::format!("tree position {pos} out of range"));
+						}
+						match tree.index(pos) {
+							Some((hash, ())) => StateValue::Cell(
+								ledger_storage_local::arena::Sp::new(hash.into()),
+							),
+							None => return ok(None),
+						}
+					}
+					_ => return err("only array, map, and merkle tree can be indexed".into()),
+				};
 			}
 
-			match (&query.key, current) {
-				(Some(key_bytes), StateValue::Map(map)) => {
-					let mut reader: &[u8] = key_bytes.as_slice();
-					match <base_crypto_local::fab::AlignedValue as midnight_serialize_local::Deserializable>::deserialize(&mut reader, 0) {
-						Ok(key) => match map.get(&key) {
-							Some(sp) => serialize_sv(&*sp).map_or_else(err, |b| ok(Some(b))),
-							None => ok(None),
-						},
-						Err(e) => err(alloc::format!("bad key: {}", e)),
-					}
-				},
-				(None, StateValue::Map(_)) => err("key required for map fields".into()),
-				(Some(_), _) => err("key provided but field is not a map".into()),
-				(None, val) => serialize_sv(val).map_or_else(err, |b| ok(Some(b))),
+			// Collections cannot be serialized without walking the full DAG.
+			if matches!(&current, StateValue::Map(_) | StateValue::BoundedMerkleTree(_)) {
+				return err("path resolves to a collection; provide a deeper path".into());
+			}
+
+			let size = midnight_serialize_local::tagged_serialized_size(&current);
+			let mut buf = Vec::with_capacity(size);
+			match midnight_serialize_local::tagged_serialize(&current, &mut buf) {
+				Ok(()) => ok(Some(buf)),
+				Err(e) => err(alloc::format!("serialize: {e}")),
 			}
 		}).collect())
 	}

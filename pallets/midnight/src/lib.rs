@@ -285,8 +285,6 @@ pub mod pallet {
 		NetworkIdNotString,
 		#[codec(index = 12)]
 		GetTransactionContextError,
-		#[codec(index = 13)]
-		ContractNotFound,
 	}
 	// grcov-excl-stop
 
@@ -308,7 +306,6 @@ pub mod pallet {
 				LedgerApiError::GetTransactionContextError => {
 					Error::<T>::GetTransactionContextError
 				},
-				LedgerApiError::ContractNotFound => Error::<T>::ContractNotFound,
 			}
 		}
 	}

@@ -100,6 +100,7 @@ pub enum StateRpcError {
 	UnableToGetLedgerStateRoot,
 	UnableToQueryContractState,
 	TooManyQueries { max: usize, got: usize },
+	PathTooDeep(usize),
 	BadQueryKey(String),
 	QueryContractStateNotSupported,
 }
@@ -173,6 +174,9 @@ impl Display for StateRpcError {
 			StateRpcError::TooManyQueries { max, got } => {
 				write!(f, "Too many queries: got {got}, maximum is {max}")
 			},
+			StateRpcError::PathTooDeep(got) => {
+				write!(f, "Path too deep: {got} steps exceeds the maximum")
+			},
 			StateRpcError::BadQueryKey(key) => {
 				write!(f, "Unable to hex decode query key: {key}")
 			},
@@ -229,9 +233,8 @@ impl From<StateRpcError> for ErrorObjectOwned {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcStateQuery {
-	pub path: Vec<u32>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub key: Option<String>,
+	/// Each element is a hex-encoded serialized `AlignedValue`.
+	pub path: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -425,16 +428,17 @@ where
 		let dehexed_address = hex::decode(&contract_address)
 			.map_err(|_| StateRpcError::BadContractAddress(contract_address))?;
 
-		// Convert RPC types to ledger types
+		// Convert RPC types to ledger types (hex-decode each path step, enforce depth bound)
 		let ledger_queries: Vec<StateQuery> = queries
 			.iter()
 			.map(|q| {
-				let key = q
-					.key
-					.as_ref()
-					.map(|k| hex::decode(k).map_err(|_| StateRpcError::BadQueryKey(k.clone())))
-					.transpose()?;
-				Ok(StateQuery { path: q.path.clone(), key })
+				let path: Vec<Vec<u8>> = q.path
+					.iter()
+					.map(|hex_step| hex::decode(hex_step).map_err(|_| StateRpcError::BadQueryKey(hex_step.clone())))
+					.collect::<Result<Vec<_>, _>>()?;
+				let bounded_path = path.try_into()
+					.map_err(|_| StateRpcError::PathTooDeep(q.path.len()))?;
+				Ok(StateQuery { path: bounded_path })
 			})
 			.collect::<Result<Vec<_>, StateRpcError>>()?;
 
@@ -457,8 +461,7 @@ where
 			.into_iter()
 			.map(|r| RpcStateQueryResult {
 				query: RpcStateQuery {
-					path: r.query.path,
-					key: r.query.key.map(hex::encode),
+					path: r.query.path.into_iter().map(hex::encode).collect(),
 				},
 				value: r.value.map(hex::encode),
 				error: r.error,

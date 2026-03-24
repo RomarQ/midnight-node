@@ -17,7 +17,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use frame_support::PalletError;
+use frame_support::{BoundedVec, PalletError, traits::ConstU32};
 use parity_scale_codec::{Decode, DecodeWithMemTracking, Encode};
 use scale_info_derive::TypeInfo;
 use sp_runtime::RuntimeDebug;
@@ -186,7 +186,6 @@ pub enum LedgerApiError {
 	FeeCalculationError,
 	HostApiError,
 	GetTransactionContextError,
-	ContractNotFound,
 }
 
 impl core::fmt::Display for LedgerApiError {
@@ -275,7 +274,6 @@ impl core::fmt::Display for LedgerApiError {
 			LedgerApiError::GetTransactionContextError => {
 				write!(f, "Error while getting transaction context")
 			},
-			LedgerApiError::ContractNotFound => write!(f, "Contract not found"),
 		}
 	}
 }
@@ -417,7 +415,6 @@ impl From<LedgerApiError> for u8 {
 			LedgerApiError::BlockLimitExceededError => 154,
 			LedgerApiError::FeeCalculationError => 155,
 			LedgerApiError::GetTransactionContextError => 165,
-			LedgerApiError::ContractNotFound => 156,
 			// Error in the Host API, not coming from Ledger
 			LedgerApiError::HostApiError => 255,
 		}
@@ -428,13 +425,17 @@ impl From<LedgerApiError> for u8 {
 #[cfg(feature = "std")]
 impl std::error::Error for LedgerApiError {}
 
+/// Maximum depth of a state query path.
+pub type MaxPathDepth = ConstU32<16>;
+
 /// A single query into the contract state tree.
+///
+/// Each element in `path` is a serialized `AlignedValue` key. The key is
+/// interpreted based on the current `StateValue` variant: array index,
+/// map key, or merkle tree position — mirroring the VM's `idx` instruction.
 #[derive(Clone, RuntimeDebug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 pub struct StateQuery {
-	/// Path of indices through nested StateValue::Arrays.
-	pub path: Vec<u32>,
-	/// Optional key bytes for collection lookups.
-	pub key: Option<Vec<u8>>,
+	pub path: BoundedVec<Vec<u8>, MaxPathDepth>,
 }
 
 /// Result of a single state query.
