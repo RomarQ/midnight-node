@@ -233,23 +233,20 @@ impl CustomContractBuilder {
 	fn build_intent(&self) -> Result<IntentCustom<DefaultDB>, CustomContractBuilderError> {
 		let mut rng = self.rng_seed.map(StdRng::from_seed).unwrap_or(StdRng::from_entropy());
 		log::info!("Create intent info for contract custom");
-		// This is to satisfy the `&'static` need to update the context's resolver
-		// Data lives for the remainder of the program's life.
-		let boxed_resolver = Box::new(
+		let resolver = Arc::new(
 			IntentCustom::<DefaultDB>::get_resolver(&self.artifact_dirs)
 				.map_err(CustomContractBuilderError::FailedReadingIntent)?,
 		);
-		let static_ref_resolver = Box::leak(boxed_resolver);
 
 		let mut actions: Vec<ContractAction<ProofPreimageMarker, DefaultDB>> = vec![];
 		for intent in &self.intent_files {
-			let custom_intent = IntentCustom::new_from_file(intent, static_ref_resolver)
+			let custom_intent = IntentCustom::new_from_file(intent, resolver.clone())
 				.map_err(CustomContractBuilderError::FailedReadingIntent)?;
 			actions.extend(custom_intent.intent.actions.iter().map(|c| (*c).clone()));
 		}
 
 		let custom_intent =
-			IntentCustom::new_from_actions(&mut rng, &actions[..], static_ref_resolver);
+			IntentCustom::new_from_actions(&mut rng, &actions[..], resolver);
 
 		log::debug!("custom_intent: {:?}", custom_intent.intent);
 		Ok(custom_intent)

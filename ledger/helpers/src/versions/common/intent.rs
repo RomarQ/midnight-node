@@ -109,7 +109,7 @@ impl<D: DB + Clone> BuildIntent<D> for IntentInfo<D> {
 #[derive(Clone)]
 pub struct IntentCustom<D: DB + Clone> {
 	pub intent: IntentOf<D>,
-	pub resolver: &'static Resolver,
+	pub resolver: Arc<Resolver>,
 }
 
 impl<D: DB + Clone> IntentCustom<D> {
@@ -118,7 +118,7 @@ impl<D: DB + Clone> IntentCustom<D> {
 
 	pub fn new_from_file(
 		path: impl AsRef<Path>,
-		resolver: &'static Resolver,
+		resolver: Arc<Resolver>,
 	) -> Result<Self, std::io::Error> {
 		let metadata = std::fs::metadata(path.as_ref())?;
 		if metadata.len() > Self::MAX_INTENT_FILE_SIZE {
@@ -135,7 +135,7 @@ impl<D: DB + Clone> IntentCustom<D> {
 	pub fn new_from_actions<R: Rng + CryptoRng + ?Sized>(
 		rng: &mut R,
 		actions: &[ContractAction<ProofPreimageMarker, D>],
-		resolver: &'static Resolver,
+		resolver: Arc<Resolver>,
 	) -> Self {
 		let now = Timestamp::from_secs(
 			SystemTime::now()
@@ -244,7 +244,7 @@ impl<D: DB + Clone> BuildIntent<D> for IntentCustom<D> {
 		_segment_id: SegmentId,
 	) -> IntentOf<D> {
 		log::debug!("Updating the resolver...");
-		context.update_resolver(self.resolver).await;
+		context.update_resolver(self.resolver.clone()).await;
 		let mut intent = self.intent.clone();
 		intent.ttl = ttl;
 		intent
@@ -265,7 +265,7 @@ impl<D: DB + Clone> BuildContractAction<D> for IntentCustom<D> {
 			actions = actions.push((*action).clone());
 		}
 
-		context.update_resolver(self.resolver).await;
+		context.update_resolver(self.resolver.clone()).await;
 
 		IntentOf::<D> {
 			guaranteed_unshielded_offer: intent.guaranteed_unshielded_offer.clone(),
