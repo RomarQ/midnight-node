@@ -25,13 +25,13 @@ use hex::encode as hex_encode;
 use lazy_static::lazy_static;
 use std::{
 	collections::{HashMap, HashSet},
-	sync::Mutex,
+	sync::{Arc, Mutex},
 	time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex as MutexTokio;
 
 lazy_static! {
-	pub static ref DEFAULT_RESOLVER: Resolver = Resolver::new(
+	pub static ref DEFAULT_RESOLVER: Arc<Resolver> = Arc::new(Resolver::new(
 		PUBLIC_PARAMS.clone(),
 		DustResolver(
 			MidnightDataProvider::new(
@@ -42,14 +42,14 @@ lazy_static! {
 			.expect("resolver could not be created")
 		),
 		Box::new(|_key_location| Box::pin(std::future::ready(Ok(None)))),
-	);
+	));
 }
 
 pub struct LedgerContext<D: DB + Clone> {
 	pub ledger_state: Mutex<Sp<LedgerState<D>, D>>,
 	pub latest_block_context: Mutex<Option<BlockContext>>,
 	pub wallets: Mutex<HashMap<WalletSeed, Wallet<D>>>,
-	pub resolver: MutexTokio<&'static Resolver>,
+	pub resolver: MutexTokio<Arc<Resolver>>,
 }
 
 #[derive(Debug, Storable)]
@@ -81,7 +81,7 @@ impl<D: DB + Clone> LedgerContext<D> {
 		Self {
 			ledger_state: Mutex::new(Sp::new(LedgerState::new(network_id))),
 			wallets: Mutex::new(HashMap::new()),
-			resolver: MutexTokio::new(&DEFAULT_RESOLVER),
+			resolver: MutexTokio::new(DEFAULT_RESOLVER.clone()),
 			latest_block_context: Mutex::new(None),
 		}
 	}
@@ -94,7 +94,7 @@ impl<D: DB + Clone> LedgerContext<D> {
 		let wallets = Mutex::new(HashMap::new());
 
 		// Use default `Resolver` for Zswaps
-		let resolver = MutexTokio::new(&*DEFAULT_RESOLVER);
+		let resolver = MutexTokio::new(DEFAULT_RESOLVER.clone());
 
 		for seed in wallet_seeds {
 			let wallet = Wallet::default(*seed, &ledger_state);
@@ -397,13 +397,13 @@ impl<D: DB + Clone> LedgerContext<D> {
 			.collect::<Vec<_>>()
 	}
 
-	pub async fn update_resolver(&self, resolver: &'static Resolver) {
+	pub async fn update_resolver(&self, resolver: Arc<Resolver>) {
 		let mut resolver_guard = self.resolver.lock().await;
 
 		*resolver_guard = resolver
 	}
 
-	pub async fn resolver(&self) -> &Resolver {
+	pub async fn resolver(&self) -> Arc<Resolver> {
 		self.resolver.lock().await.clone()
 	}
 

@@ -117,6 +117,6 @@ pub fn fork_context_7_to_8(
 		ledger_state: ledger_state.into(),
 		latest_block_context: Some(latest_block_context).into(),
 		wallets: wallets.into(),
-		resolver: MutexTokio::new(&DEFAULT_RESOLVER),
+		resolver: MutexTokio::new(DEFAULT_RESOLVER.clone()),
 	})
 }
