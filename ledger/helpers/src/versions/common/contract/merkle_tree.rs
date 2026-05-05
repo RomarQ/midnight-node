@@ -31,7 +31,7 @@ use super::{
 
 #[cfg(feature = "test-utils")]
 lazy_static! {
-	static ref RESOLVER: Resolver = super::super::test_resolver("simple-merkle-tree");
+	static ref RESOLVER: Arc<Resolver> = Arc::new(super::super::test_resolver("simple-merkle-tree"));
 }
 
 #[cfg(not(feature = "test-utils"))]
@@ -41,7 +41,7 @@ use super::{
 
 #[cfg(not(feature = "test-utils"))]
 lazy_static! {
-	pub static ref RESOLVER: Resolver = Resolver::new(
+	pub static ref RESOLVER: Arc<Resolver> = Arc::new(Resolver::new(
 		PUBLIC_PARAMS.clone(),
 		DustResolver(
 			MidnightDataProvider::new(
@@ -52,16 +52,16 @@ lazy_static! {
 			.unwrap(),
 		),
 		Box::new(|_key_location| Box::pin(std::future::ready(Ok(None)))),
-	);
+	));
 }
 
 pub struct MerkleTreeContract {
-	pub resolver: &'static Resolver,
+	pub resolver: Arc<Resolver>,
 }
 
 impl MerkleTreeContract {
 	pub fn new() -> Self {
-		Self { resolver: &RESOLVER }
+		Self { resolver: RESOLVER.clone() }
 	}
 }
 
@@ -80,8 +80,8 @@ impl<D: DB + Clone> Contract<D> for MerkleTreeContract {
 		rng: &mut StdRng,
 	) -> ContractDeploy<D> {
 		let root = MerkleTree::<()>::blank(10).root();
-		let store_op = ContractOperation::new(verifier_key(self.resolver, "store").await);
-		let check_op = ContractOperation::new(verifier_key(self.resolver, "check").await);
+		let store_op = ContractOperation::new(verifier_key(&self.resolver, "store").await);
+		let check_op = ContractOperation::new(verifier_key(&self.resolver, "check").await);
 
 		let contract = ContractState {
 			data: ChargedState::new(stval!([[{MT(10) {}}, (0u64), {root => null}]])),
@@ -99,8 +99,8 @@ impl<D: DB + Clone> Contract<D> for MerkleTreeContract {
 		ContractDeploy::new(rng, contract)
 	}
 
-	fn resolver(&self) -> &'static Resolver {
-		self.resolver
+	fn resolver(&self) -> Arc<Resolver> {
+		self.resolver.clone()
 	}
 
 	fn transcript(

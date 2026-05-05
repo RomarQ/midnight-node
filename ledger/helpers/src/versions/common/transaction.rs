@@ -255,7 +255,7 @@ impl<D: DB + Clone> StandardTrasactionInfo<D> {
 		let mut rng = self.rng.split();
 		Ok(self
 			.prover
-			.prove(tx, rng.split(), resolver, &parameters.cost_model.runtime_cost_model)
+			.prove(tx, rng.split(), &resolver, &parameters.cost_model.runtime_cost_model)
 			.await
 			.seal(rng))
 	}
@@ -537,7 +537,7 @@ impl<D: DB + Clone> ClaimMintInfo<D> {
 			.prove(
 				tx_unproven,
 				self.rng.clone(),
-				resolver,
+				&resolver,
 				&parameters.cost_model.runtime_cost_model,
 			)
 			.await;
