@@ -8148,6 +8148,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "midnight-rpc-api"
+version = "0.1.0"
+dependencies = [
+ "jsonrpsee",
+ "serde",
+ "sp-storage",
+]
+
+[[package]]
 name = "midnight-serialize"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10051,6 +10060,7 @@ dependencies = [
  "hex",
  "jsonrpsee",
  "midnight-node-ledger",
+ "midnight-rpc-api",
  "pallet-midnight",
  "sc-client-api",
  "schemars 0.8.22",
