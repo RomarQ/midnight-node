@@ -1,4 +1,5 @@
 use crate::commands::{
+	bridge_transfer::{self, BridgeTransferArgs},
 	contract_address::{self, ContractAddressArgs},
 	contract_state::{self, ContractStateArgs},
 	dust_balance::{self, DustBalanceArgs, DustBalanceResult},
@@ -11,8 +12,8 @@ use crate::commands::{
 	root_call::{self, RootCallArgs},
 	runtime_upgrade::{self, RuntimeUpgradeArgs},
 	send_intent::{self, SendIntentArgs},
-	show_address::ShowAddress,
-	show_address::{self, ShowAddressArgs},
+	show_address::{self, ShowAddress, ShowAddressArgs},
+	show_block::{self, ShowBlockArgs, ShowBlockValue},
 	show_ledger_parameters::{self, ShowLedgerParametersArgs},
 	show_seed::{self, ShowSeedArgs},
 	show_token_type::{self, ShowTokenType, ShowTokenTypeArgs},
@@ -61,6 +62,8 @@ pub enum Commands {
 	ShowViewingKey(ShowViewingKeyArgs),
 	/// Show the token type for a contract address + domain sep pair
 	ShowTokenType(ShowTokenTypeArgs),
+	/// Inspect a block: view metadata and deserialized transactions
+	ShowBlock(ShowBlockArgs),
 	/// Show the deserialized value of a serialized transaction
 	ShowTransaction(ShowTransactionArgs),
 	/// Show and save in a file the Contract Address included in a DeployContract tx
@@ -83,6 +86,8 @@ pub enum Commands {
 	Version,
 	/// Fetch
 	Fetch(FetchArgs),
+	/// Transfer cNight from a Cardano wallet to the ICS validator address
+	BridgeTransfer(BridgeTransferArgs),
 }
 
 /// Node Toolkit for Midnight
@@ -190,6 +195,21 @@ pub async fn run_command(cmd: Commands) -> Result<(), Box<dyn std::error::Error 
 			println!("{viewing_key}");
 			Ok(())
 		},
+		Commands::ShowBlock(args) => {
+			let result = show_block::execute(args).await?;
+			match result {
+				ShowBlockValue::Json(json) => {
+					println!("{}", serde_json::to_string_pretty(&json)?);
+				},
+				ShowBlockValue::Human(value) => {
+					for block in value {
+						println!("{}", block);
+					}
+				},
+				ShowBlockValue::DryRun(()) => (),
+			};
+			Ok(())
+		},
 		Commands::ShowTransaction(args) => {
 			let transaction_information = show_transaction::execute(args)?;
 
@@ -251,5 +271,6 @@ pub async fn run_command(cmd: Commands) -> Result<(), Box<dyn std::error::Error 
 			Ok(())
 		},
 		Commands::Fetch(args) => fetch::execute(args).await,
+		Commands::BridgeTransfer(args) => bridge_transfer::execute(args).await,
 	}
 }

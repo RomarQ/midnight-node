@@ -70,6 +70,7 @@ pub trait MidnightApi<BlockHash> {
 pub enum StateRpcError {
     BadContractAddress(String),
     BadAccountAddress(String),
+    ContractNotPresent,
     UnableToGetContractState,
     UnableToGetZSwapChainState,
     UnableToGetZSwapStateRoot,
@@ -100,6 +101,7 @@ impl Display for StateRpcError {
         match self {
             Self::BadContractAddress(addr) => write!(f, "Unable to decode contract address: {addr}"),
             Self::BadAccountAddress(addr) => write!(f, "Unable to decode account address: {addr}"),
+            Self::ContractNotPresent => write!(f, "Contract not present at the requested address"),
             Self::UnableToGetContractState => write!(f, "Unable to get requested contract state"),
             Self::UnableToGetZSwapChainState => write!(f, "Unable to get requested zswap chain state"),
             Self::UnableToGetZSwapStateRoot => write!(f, "Unable to get requested zswap state root"),
