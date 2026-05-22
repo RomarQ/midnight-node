@@ -1,26 +1,11 @@
 // This file is part of midnight-node.
 // Copyright (C) Midnight Foundation
 // SPDX-License-Identifier: Apache-2.0
-// Licensed under the Apache License, Version 2.0 (the "License");
-// You may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-// http://www.apache.org/licenses/LICENSE-2.0
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
 
-use jsonrpsee::{
-	core::RpcResult,
-	proc_macros::rpc,
-	types::error::{ErrorObject, ErrorObjectOwned, INVALID_PARAMS_CODE},
-};
-
+use midnight_node_ledger::rpc::query_contract_state;
 use pallet_midnight::{LedgerApiError, MidnightRuntimeApi};
 use sc_client_api::{BlockBackend, BlockchainEvents};
 use sp_api::{ApiExt, ProvideRuntimeApi};
@@ -28,176 +13,9 @@ use sp_blockchain::HeaderBackend;
 use sp_runtime::traits::Block as BlockT;
 use std::sync::Arc;
 
-pub const API_VERSIONS: [u32; 1] = [2];
-
-/// Midnight core RPC API.
-///
-/// Provides methods for querying contract state, ledger state roots, and version
-/// information from the Midnight privacy ledger.
-#[rpc(client, server)]
-pub trait MidnightApi<BlockHash> {
-	/// Returns the state of a deployed contract.
-	///
-	/// The contract is identified by its hex-encoded address. The returned state is
-	/// also hex-encoded. Queries run against the best block unless `at` specifies
-	/// a historical block hash.
-	#[method(name = "midnight_contractState")]
-	fn get_state(
-		&self,
-		contract_address: String,
-		at: Option<BlockHash>,
-	) -> Result<String, StateRpcError>;
-
-	/// Returns the Merkle root of the zswap (shielded transaction) state tree.
-	///
-	/// The root is returned as raw bytes. If `at` is `None`, the best block is used.
-	#[method(name = "midnight_zswapStateRoot")]
-	fn get_zswap_state_root(&self, at: Option<BlockHash>) -> Result<Vec<u8>, StateRpcError>;
-
-	/// Returns the Merkle root of the overall ledger state.
-	///
-	/// The root is returned as raw bytes. If `at` is `None`, the best block is used.
-	#[method(name = "midnight_ledgerStateRoot")]
-	fn get_ledger_state_root(&self, at: Option<BlockHash>) -> Result<Vec<u8>, StateRpcError>;
-
-	/// Returns the RPC API version(s) supported by this node.
-	///
-	/// The returned array currently contains a single element (`[2]`).
-	/// This is the RPC protocol version, distinct from the runtime API version.
-	#[method(name = "midnight_apiVersions")]
-	fn get_supported_api_versions(&self) -> RpcResult<Vec<u32>>;
-
-	/// Returns the ledger implementation version string.
-	///
-	/// If `at` is `None`, the best block is used.
-	#[method(name = "midnight_ledgerVersion")]
-	fn get_ledger_version(&self, at: Option<BlockHash>) -> Result<String, BlockRpcError>;
-}
-
-#[derive(Debug)]
-pub enum StateRpcError {
-	BadContractAddress(String),
-	BadAccountAddress(String),
-	ContractNotPresent,
-	UnableToGetContractState,
-	UnableToGetZSwapChainState,
-	UnableToGetZSwapStateRoot,
-	UnableToGetLedgerStateRoot,
-}
-
-#[derive(Debug)]
-pub enum BlockRpcError {
-	UnableToGetBlock(String),
-	BlockNotFound,
-	UnableToGetLedgerState,
-	UnableToDecodeTransactions(String),
-	UnableToSerializeBlock(String),
-	UnableToGetChainVersion,
-}
-
-#[derive(Debug, Serialize)]
-pub enum EventsError {
-	HexDecode { event: String, error: String },
-	Decode { event: String, error: String },
-	UnableToSerializeEvent { event: String, error: String },
-}
-
-impl Display for BlockRpcError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-		match self {
-			BlockRpcError::UnableToGetBlock(reason) => {
-				write!(f, "Error while getting block: {}", reason)
-			},
-			BlockRpcError::BlockNotFound => {
-				write!(f, "Unable to get block by hash")
-			},
-			BlockRpcError::UnableToDecodeTransactions(reason) => {
-				write!(f, "Unable to decode transactions for block: {}", reason)
-			},
-			BlockRpcError::UnableToSerializeBlock(reason) => {
-				write!(f, "Unable to serialize block to JSON: {}", reason)
-			},
-			BlockRpcError::UnableToGetChainVersion => {
-				write!(f, "Unable to read chain name")
-			},
-			BlockRpcError::UnableToGetLedgerState => {
-				write!(f, "Unable to get ledger state")
-			},
-		}
-	}
-}
-
-impl Display for StateRpcError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-		match self {
-			StateRpcError::BadContractAddress(malformed_address) => {
-				write!(f, "Unable to decode contract address: {}", malformed_address)
-			},
-			StateRpcError::BadAccountAddress(malformed_address) => {
-				write!(f, "Unable to decode account address: {}", malformed_address)
-			},
-			StateRpcError::ContractNotPresent => {
-				write!(f, "Contract not present at the requested address")
-			},
-			StateRpcError::UnableToGetContractState => {
-				write!(f, "Unable to get requested contract state")
-			},
-			StateRpcError::UnableToGetZSwapChainState => {
-				write!(f, "Unable to get requested zswap chain state")
-			},
-			StateRpcError::UnableToGetZSwapStateRoot => {
-				write!(f, "Unable to get requested zswap state root")
-			},
-			StateRpcError::UnableToGetLedgerStateRoot => {
-				write!(f, "Unable to get requested ledger state root")
-			},
-		}
-	}
-}
-
-impl Display for EventsError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-		match self {
-			EventsError::HexDecode { event: malformed_event, error } => {
-				write!(f, "Unable to hex decode event: {} , because of {}", malformed_event, error)
-			},
-
-			EventsError::Decode { event: malformed_event, error } => {
-				write!(f, "Unable to decode event: {} , because of {}", malformed_event, error)
-			},
-
-			EventsError::UnableToSerializeEvent { event: malformed_event, error } => {
-				write!(
-					f,
-					"Unable to serialize event to json: {} , because of {}",
-					malformed_event, error
-				)
-			},
-		}
-	}
-}
-
-impl std::error::Error for BlockRpcError {}
-impl std::error::Error for StateRpcError {}
-impl std::error::Error for EventsError {}
-
-impl From<EventsError> for ErrorObjectOwned {
-	fn from(value: EventsError) -> Self {
-		ErrorObject::owned(INVALID_PARAMS_CODE, value.to_string(), None::<()>)
-	}
-}
-
-impl From<BlockRpcError> for ErrorObjectOwned {
-	fn from(value: BlockRpcError) -> Self {
-		ErrorObject::owned(INVALID_PARAMS_CODE, value.to_string(), None::<()>)
-	}
-}
-
-impl From<StateRpcError> for ErrorObjectOwned {
-	fn from(value: StateRpcError) -> Self {
-		ErrorObject::owned(INVALID_PARAMS_CODE, value.to_string(), None::<()>)
-	}
-}
+// Re-export the RPC trait, error types, query types, and constants from
+// midnight-rpc-api so existing consumers of pallet-midnight-rpc don't break.
+pub use midnight_rpc_api::*;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum Operation {
@@ -370,5 +188,71 @@ where
 			.map_err(|_e| BlockRpcError::BlockNotFound)?;
 
 		Ok(String::from_utf8_lossy(&ledger_version).to_string())
+	}
+
+	fn query_contract_state(
+		&self,
+		contract_address: String,
+		queries: Vec<RpcStateQuery>,
+		at: Option<<Block as BlockT>::Hash>,
+	) -> Result<Vec<RpcStateQueryResult>, StateRpcError> {
+		if queries.len() > MAX_STATE_QUERIES {
+			return Err(StateRpcError::TooManyQueries {
+				max: MAX_STATE_QUERIES,
+				got: queries.len(),
+			});
+		}
+		let dehexed_address = hex::decode(&contract_address)
+			.map_err(|_| StateRpcError::BadContractAddress(contract_address))?;
+
+		// Extract raw bytes from each StorageKey and enforce depth bound.
+		// StorageKey handles hex decoding at the serde layer.
+		let paths: Vec<Vec<Vec<u8>>> = queries
+			.iter()
+			.map(|q| {
+				if q.path.len() > MAX_PATH_DEPTH {
+					return Err(StateRpcError::PathTooDeep(q.path.len()));
+				}
+				Ok(q.path.iter().map(|key| key.0.clone()).collect())
+			})
+			.collect::<Result<Vec<_>, StateRpcError>>()?;
+
+		let api = self.client.runtime_api();
+		let at = at.unwrap_or_else(|| self.client.info().best_hash);
+
+		let api_version = get_api_version::<C, Block>(&api, at)
+			.map_err(|_| StateRpcError::UnableToGetContractState)?;
+		if api_version < 6 {
+			return Err(StateRpcError::UnableToGetContractState);
+		}
+
+		// Read the state key via the runtime API, then call the bridge directly.
+		// This avoids going through WASM for each query — the bridge navigates
+		// the contract state lazily in ParityDB (O(log n) per query).
+		let state_key = api
+			.get_state_key(at)
+			.map_err(|_| StateRpcError::UnableToGetContractState)?;
+
+		let results = query_contract_state(&state_key, &dehexed_address, &paths)
+			.map_err(|_| StateRpcError::UnableToGetContractState)?;
+
+		Ok(results
+			.into_iter()
+			.zip(queries.iter())
+			.map(|(result, query)| {
+				match result {
+					Ok(value) => RpcStateQueryResult {
+						query: query.clone(),
+						value: value.map(hex::encode),
+						error: None,
+					},
+					Err(msg) => RpcStateQueryResult {
+						query: query.clone(),
+						value: None,
+						error: Some(msg),
+					},
+				}
+			})
+			.collect())
 	}
 }

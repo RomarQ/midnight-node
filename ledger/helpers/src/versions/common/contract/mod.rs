@@ -56,7 +56,7 @@ pub trait Contract<D: DB + Clone>: Send + Sync {
 		rng: &mut StdRng,
 	) -> ContractDeploy<D>;
 
-	fn resolver(&self) -> &'static Resolver;
+	fn resolver(&self) -> Arc<Resolver>;
 
 	fn transcript(
 		&self,
