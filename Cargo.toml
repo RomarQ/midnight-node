@@ -71,54 +71,61 @@ default_constructed_unit_structs = { level = "allow", priority = 2 } # stylistic
 
 [workspace.dependencies]
 # Midnight dependencies
+#
+# Every ledger crate comes from the RomarQ/midnight-ledger fork by revision, so a
+# git consumer of these helpers needs no [patch.crates-io] table:
+# - rq/midnight-rs-ledger-9 (66c29ceb): the ledger 9 set at 9.1.0.0-rc.5, plus the
+#   crates both generations share (base-crypto, serialize, storage, storage-core,
+#   transient-crypto 2.2, zkir).
+# - rq/midnight-rs-ledger-8 (ef6d0698): the ledger 8 set at 8.1.2, and
+#   v8-to-v9-state-translation. It takes the shared crates from the ledger 9 revision.
 # Shared 2.x deps (used by Ledger 8)
-coin-structure = { version = "^2.0.0", package = "midnight-coin-structure" }
-base-crypto = { version = "^1.0.0", package = "midnight-base-crypto" }
-transient-crypto = { version = "^2.0.0", package = "midnight-transient-crypto" }
+coin-structure = { version = "^2.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1", package = "midnight-coin-structure" }
+base-crypto = { version = "^1.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-base-crypto" }
+transient-crypto = { version = "^2.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-transient-crypto" }
 # midnight-zkir 2.2.0 (ledger 9.1 rc.3) carries both the 3.x stack and `transient-crypto-old`
 # (2.x), so it proves L8 (v1 circuits) and L9 (v1/v2) alike. The rc.2-era renamed `zkir-2-1`
 # crate is gone: rc.3 dropped the separate 2.x zkir, and its frozen `Zkir` impl can't satisfy
 # transient-crypto 2.2.0's new tagged-IR trait methods.
-zkir = { version = "^2.2.0", package = "midnight-zkir" }
+zkir = { version = "^2.2.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-zkir" }
 
 # Ledger 8 (compatible with layout-v2)
 # coin-structure, transient-crypto (2.x) and zkir are shared above so reuse those entries.
-mn-ledger-8 = { version = "=8.1.2", package = "midnight-ledger" }
+mn-ledger-8 = { version = "=8.1.2", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1", package = "midnight-ledger" }
 # `state-translation` (needed by the v8->v9 storage migration) pulls in
 # `public-internal-structure`, exposing `merkle_patricia_trie`/`storable`/the
 # `state_translation` module used by the `v8-to-v9-state-translation` crate.
-ledger-storage-ledger-8 = { version = "=2.0.4", package = "midnight-storage", features = ["parity-db", "state-translation"] }
-onchain-runtime-ledger-8 = { version = "=3.1.1", package = "midnight-onchain-runtime" }
+ledger-storage-ledger-8 = { version = "=2.0.4", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-storage", features = ["parity-db", "state-translation"] }
+onchain-runtime-ledger-8 = { version = "=3.1.1", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1", package = "midnight-onchain-runtime" }
 # Same `midnight-onchain-state` instance that `mn-ledger-8`'s `ContractState`
 # resolves to (via onchain-runtime 3.1.1); used as the v8 side of the state translation table.
-onchain-state-ledger-8 = { version = "=3.0.1", package = "midnight-onchain-state" }
-zswap-ledger-8 = { version = "=8.1.2", package = "midnight-zswap" }
+onchain-state-ledger-8 = { version = "=3.0.1", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1", package = "midnight-onchain-state" }
+zswap-ledger-8 = { version = "=8.1.2", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1", package = "midnight-zswap" }
 
 # Ledger 9 (compatible with layout-v2; midnight-ledger-v9 crate)
 # storage shares versions with L8 so reuses that entry. coin-structure and
 # transient-crypto went semver-major in L9 so get their own entries. The workspace `zkir`
 # (midnight-zkir 2.2.0) serves both L8 and L9.
-mn-ledger-9 = { version = "=1.0.0", package = "midnight-ledger-v9" }
-onchain-runtime-ledger-9 = { version = "=4.0.0", package = "midnight-onchain-runtime" }
+mn-ledger-9 = { version = "=1.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-ledger-v9" }
+onchain-runtime-ledger-9 = { version = "=4.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-onchain-runtime" }
 # v9 side of the state translation table (matches `mn-ledger-9`'s `ContractState`
-# via onchain-runtime 4.0.0). Patched to onchain-state-4.0.0-rc.3 by [patch.crates-io].
-onchain-state-ledger-9 = { version = "=4.0.0", package = "midnight-onchain-state" }
-zswap-ledger-9 = { version = "=9.0.0", package = "midnight-zswap" }
-coin-structure-ledger-9 = { version = "=3.0.0", package = "midnight-coin-structure" }
-transient-crypto-ledger-9 = { version = "=3.0.0", package = "midnight-transient-crypto" }
+# via onchain-runtime 4.0.0).
+onchain-state-ledger-9 = { version = "=4.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-onchain-state" }
+zswap-ledger-9 = { version = "=9.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-zswap" }
+coin-structure-ledger-9 = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-coin-structure" }
+transient-crypto-ledger-9 = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-transient-crypto" }
 
-# v8->v9 state translation table, maintained by the ledger team. Unpublished and not in any
-# release tag - it lives only on the ledger repo's `state-translation/v8-to-v9` branch - so it
-# is pinned by rev. Its own dependency requirements resolve through the [patch.crates-io] rc
-# pins below, so it shares one `midnight-storage` / `midnight-onchain-state` instance with the
-# rest of the workspace.
-v8-to-v9-state-translation = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "da96e33d78ee9b7d3867b15c1037510d499cd909" }
+# v8->v9 state translation table, maintained by the ledger team on its
+# `state-translation/v8-to-v9` branch (rev da96e33). The fork's ledger 8 branch carries it,
+# so it shares one `midnight-storage` / `midnight-onchain-state` instance with the rest of
+# the workspace.
+v8-to-v9-state-translation = { version = "0.1.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1" }
 
 # Storage core v2 layout
-midnight-storage-core = { version = "1.2.0", features = ["layout-v2", "gc-v1"] }
+midnight-storage-core = { version = "1.2.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", features = ["layout-v2", "gc-v1"] }
 
 # res can't currently dep on mn-ledger without it bringing in non-std deps (which annoys the runtime).
-midnight-serialize = { version = "=1.2.0", package = "midnight-serialize" }
+midnight-serialize = { version = "=1.2.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f", package = "midnight-serialize" }
 
 # Midnight local dependencies
 midnight-node-ledger = { path = "ledger", default-features = false }
@@ -459,34 +466,6 @@ zeroize = { opt-level = 3 }
 [patch.crates-io]
 yamux = { git = "https://github.com/midnightntwrk/rust-yamux", branch = "yamux-v0.12.2" }
 parity-db = { git = "https://github.com/midnightntwrk/parity-db.git", branch = "master" }
-# Ledger 9.1.0.0-rc.5, pinned per crate rather than by the single `ledger-9.1.0.0-rc.5`
-# workspace tag. Two reasons: the workspace tag is mutable (it was re-pointed from dd6c68b0
-# to 67f9f972 four days after we locked it), and it drags every crate out of one checkout
-# whose manifests still carry `path = "../x"` deps. The per-crate `isolate <tag>` commits are
-# the same tree with those path deps rewritten to version deps, so cargo resolves each crate
-# through this table instead of implicitly through one repo's directory layout. That is why
-# `midnight-ledger-static` needs an entry here: under the workspace tag it arrived free via
-# `path = "../static"`, but crates.io has no 10.0.0.
-midnight-ledger-v9            = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "crate-ledger-9.1.0.0-rc.5" }
-midnight-ledger-static        = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "crate-ledger-9.1.0.0-rc.5" }
-midnight-zswap                = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zswap-9.0.0-rc.5" }
-midnight-coin-structure       = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "coin-structure-3.0.0-rc.2" }
-midnight-base-crypto          = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-1.1.0-rc.3" }
-midnight-base-crypto-derive   = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-derive-1.1.0-rc.2" }
-midnight-transient-crypto     = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-3.0.0-rc.3" }
-midnight-transient-crypto-old = { package = "midnight-transient-crypto", git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.2.0-rc.1" }
-midnight-onchain-vm           = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-vm-4.0.0-rc.3" }
-midnight-onchain-state        = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-state-4.0.0-rc.4" }
-midnight-onchain-runtime      = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-runtime-4.0.0-rc.4" }
-midnight-zkir                 = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zkir-2.2.0-rc.4" }
-# zkir-v3 is `publish = false`, so it is never on crates.io; the ledger team's published
-# patchset omits it because only `test-utilities` (which we enable) activates it. Its
-# source is byte-identical between this isolate tag and the rc.5 tree - only the manifest
-# differs - so the older rc.1 tag is the right pin.
-midnight-zkir-v3              = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zkir-v3-3.0.0-rc.1" }
-midnight-serialize            = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "serialize-1.2.0-rc.2" }
-midnight-storage              = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "storage-2.0.4-rc.1" }
-midnight-storage-core         = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "storage-core-1.2.2-rc.1" }
 
 [workspace.metadata.cargo-shear]
 ignored = []
